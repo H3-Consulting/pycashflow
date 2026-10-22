@@ -19,7 +19,10 @@ from datetime import datetime
 # DATABASE_URL must be set BEFORE create_app() is called: Flask-SQLAlchemy
 # reads it when create_app() calls db.init_app(app), creating the engine at
 # that point.  Overriding app.config afterwards has no effect on the engine.
-os.environ["DATABASE_URL"] = "sqlite:///:memory:"
+# Set TEST_DATABASE_URL to run the suite against a real server (CI uses a
+# throwaway PostgreSQL with a plain postgresql:// URL); it must be an empty
+# database because the schema is created here and the suite writes to it.
+os.environ["DATABASE_URL"] = os.environ.get("TEST_DATABASE_URL") or "sqlite:///:memory:"
 os.environ.setdefault("SECRET_KEY", "pytest-secret-key-32chars-minimum!")
 os.environ.setdefault("SESSION_COOKIE_SECURE", "false")
 os.environ.setdefault("APP_SECRET", "pytest-app-secret-for-crypto-utils-32!")

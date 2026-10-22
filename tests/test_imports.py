@@ -100,28 +100,24 @@ class TestValidateUpload:
 # context.  The ``app_ctx`` fixture (from conftest.py) pushes one and provides
 # access to the in-memory SQLite test database.
 #
-# Each test uses a unique user_id (negative values, safe to use since SQLite
-# does not enforce foreign keys by default) to avoid cross-test interference.
+# Each test imports into its own freshly created user (``uid`` fixture) so
+# rows never collide across tests and the user_id foreign key is satisfied
+# on databases that enforce it (PostgreSQL in CI).
 
 
-_UID_COUNTER = -1000  # Start well outside real user IDs
-
-
-def _uid():
-    """Return a fresh unique user_id for each test to prevent UPSERT conflicts."""
-    global _UID_COUNTER
-    _UID_COUNTER -= 1
-    return _UID_COUNTER
+@pytest.fixture()
+def uid(make_user):
+    return make_user()
 
 
 class TestCSVParsing:
-    def test_valid_row_counts_as_success(self, app_ctx):
+    def test_valid_row_counts_as_success(self, app_ctx, uid):
         f = make_file("t.csv", csv_bytes("Salary,3000.00,Income,Monthly,2025-03-01,2025-03-01"))
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert success == 1
         assert errors == 0
 
-    def test_multiple_valid_rows_all_succeed(self, app_ctx):
+    def test_multiple_valid_rows_all_succeed(self, app_ctx, uid):
         f = make_file(
             "t.csv",
             csv_bytes(
@@ -130,72 +126,70 @@ class TestCSVParsing:
                 "Bonus,5000,Income,Onetime,2025-06-01,2025-06-01",
             ),
         )
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert success == 3
         assert errors == 0
 
-    def test_row_with_too_few_columns_counts_as_error(self, app_ctx):
+    def test_row_with_too_few_columns_counts_as_error(self, app_ctx, uid):
         f = make_file("t.csv", csv_bytes("Salary,3000,Income,Monthly"))  # only 4 cols
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert errors == 1
         assert success == 0
 
-    def test_invalid_type_counts_as_error(self, app_ctx):
+    def test_invalid_type_counts_as_error(self, app_ctx, uid):
         f = make_file(
             "t.csv",
             csv_bytes("Salary,3000,Payment,Monthly,2025-03-01,2025-03-01"),  # 'Payment' is invalid
         )
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert errors == 1
         assert success == 0
 
-    def test_invalid_frequency_counts_as_error(self, app_ctx):
+    def test_invalid_frequency_counts_as_error(self, app_ctx, uid):
         f = make_file(
             "t.csv",
             csv_bytes("Salary,3000,Income,Fortnightly,2025-03-01,2025-03-01"),
         )
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert errors == 1
         assert success == 0
 
-    def test_non_numeric_amount_counts_as_error(self, app_ctx):
+    def test_non_numeric_amount_counts_as_error(self, app_ctx, uid):
         f = make_file(
             "t.csv",
             csv_bytes("Salary,three_thousand,Income,Monthly,2025-03-01,2025-03-01"),
         )
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert errors == 1
         assert success == 0
 
-    def test_invalid_date_format_counts_as_error(self, app_ctx):
+    def test_invalid_date_format_counts_as_error(self, app_ctx, uid):
         f = make_file(
             "t.csv",
             csv_bytes("Salary,3000,Income,Monthly,01/03/2025,01/03/2025"),  # wrong format
         )
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert errors == 1
         assert success == 0
 
-    def test_empty_name_counts_as_error(self, app_ctx):
+    def test_empty_name_counts_as_error(self, app_ctx, uid):
         f = make_file("t.csv", csv_bytes(",3000,Income,Monthly,2025-03-01,2025-03-01"))
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert errors == 1
         assert success == 0
 
-    def test_all_valid_frequencies_are_accepted(self, app_ctx):
+    def test_all_valid_frequencies_are_accepted(self, app_ctx, uid):
         """Every documented frequency value must be accepted by the parser."""
         valid_frequencies = [
             "Monthly", "Quarterly", "Yearly", "Weekly", "BiWeekly", "Onetime"
         ]
-        uid = _uid()
         for freq in valid_frequencies:
             f = make_file("t.csv", csv_bytes(f"Item{freq},100,Income,{freq},2025-03-01,2025-03-01"))
             success, errors = upload(f, user_id=uid)
             assert success == 1, f"Frequency '{freq}' should be valid but got errors={errors}"
             assert errors == 0
 
-    def test_mixed_valid_and_invalid_rows_counted_separately(self, app_ctx):
-        uid = _uid()
+    def test_mixed_valid_and_invalid_rows_counted_separately(self, app_ctx, uid):
         f = make_file(
             "t.csv",
             csv_bytes(
@@ -209,7 +203,7 @@ class TestCSVParsing:
         assert success == 2
         assert errors == 2
 
-    def test_both_income_and_expense_types_accepted(self, app_ctx):
+    def test_both_income_and_expense_types_accepted(self, app_ctx, uid):
         f = make_file(
             "t.csv",
             csv_bytes(
@@ -217,12 +211,12 @@ class TestCSVParsing:
                 "Rent,1000,Expense,Monthly,2025-03-05,2025-03-05",
             ),
         )
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert success == 2
         assert errors == 0
 
-    def test_amount_with_decimal_places_accepted(self, app_ctx):
+    def test_amount_with_decimal_places_accepted(self, app_ctx, uid):
         f = make_file("t.csv", csv_bytes("Salary,3000.50,Income,Monthly,2025-03-01,2025-03-01"))
-        success, errors = upload(f, user_id=_uid())
+        success, errors = upload(f, user_id=uid)
         assert success == 1
         assert errors == 0

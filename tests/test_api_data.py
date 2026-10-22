@@ -20,7 +20,7 @@ from werkzeug.security import generate_password_hash
 
 # Module-level imports: captured before test stubs can replace sys.modules.
 from app import db as _db
-from app.models import User, Schedule, Scenario, Balance, Hold, Skip
+from app.models import User, Schedule, Scenario, Balance, Hold, Skip, UserToken
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -469,6 +469,10 @@ class TestGuestUserDataAccess:
         # Clean up
         with flask_app.app_context():
             Schedule.query.filter_by(name="_test_owner_sched").delete()
+            # Tokens reference the user; PostgreSQL enforces that FK.
+            UserToken.query.filter(UserToken.user_id.in_(
+                _db.session.query(User.id).filter_by(email="_guest_api@test.local")
+            )).delete(synchronize_session=False)
             User.query.filter_by(email="_guest_api@test.local").delete()
             _db.session.commit()
 
@@ -746,6 +750,10 @@ class TestBalance:
 
         # Clean up
         with flask_app.app_context():
+            # Tokens reference the user; PostgreSQL enforces that FK.
+            UserToken.query.filter(UserToken.user_id.in_(
+                _db.session.query(User.id).filter_by(email="_nobal@test.local")
+            )).delete(synchronize_session=False)
             User.query.filter_by(email="_nobal@test.local").delete()
             _db.session.commit()
 

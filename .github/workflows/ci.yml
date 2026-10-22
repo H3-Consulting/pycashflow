@@ -20,7 +20,7 @@ concurrency:
 
 jobs:
   tests:
-    name: Tests (Python ${{ matrix.python-version }})
+    name: Tests (Python ${{ matrix.python-version }}, ${{ matrix.db }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -28,6 +28,26 @@ jobs:
         # 3.11 is the documented minimum for manual installs; 3.15 matches
         # the python:3.15-alpine base image used by the Dockerfile.
         python-version: ["3.11", "3.15"]
+        # Every run covers PostgreSQL as well as SQLite: production deploys
+        # use PostgreSQL, which enforces constraints SQLite ignores.
+        db: [sqlite, postgres]
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: pycashflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U test -d pycashflow_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # A plain postgresql:// URL, the form hosting providers hand out.
+      TEST_DATABASE_URL: ${{ matrix.db == 'postgres' && 'postgresql://test:test@localhost:5432/pycashflow_test' || '' }}
     steps:
       - uses: actions/checkout@v5
 
@@ -69,5 +89,10 @@ jobs:
           # ("failed to reserve cache") must not fail the build.
           cache-to: type=gha,mode=max,ignore-error=true
 
-      - name: Smoke test image
+      - name: Smoke test image (SQLite)
+        run: .github/scripts/docker-smoke-test.sh pycashflow:ci "ci-${{ github.sha }}"
+
+      - name: Smoke test image (PostgreSQL)
+        env:
+          SMOKE_DB: postgres
         run: .github/scripts/docker-smoke-test.sh pycashflow:ci "ci-${{ github.sha }}"
