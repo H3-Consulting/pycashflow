@@ -298,12 +298,15 @@ def update():
             return redirect(url_for('main.schedule'))
 
         current = Schedule.query.filter_by(id=int(request.form['id']), user_id=user_id).first()
+        if not current:
+            flash("Schedule not found")
+            return redirect(url_for('main.schedule'))
         existing = Schedule.query.filter_by(name=new_name, user_id=user_id).first()
         if existing:
             if current.name != new_name:
                 flash("Schedule name already exists")
                 return redirect(url_for('main.schedule'))
-        my_data = Schedule.query.filter_by(id=int(request.form.get('id')), user_id=user_id).first()
+        my_data = current
         my_data.name = new_name
         my_data.amount = new_amount
         my_data.type = new_type
@@ -328,6 +331,9 @@ def addhold(id):
     # add a hold item from the schedule
     user_id = get_effective_user_id()
     schedule = Schedule.query.filter_by(id=int(id), user_id=user_id).first()
+    if not schedule:
+        flash("Schedule not found")
+        return redirect(url_for('main.schedule'))
     hold = Hold(name=schedule.name, type=schedule.type, amount=schedule.amount, user_id=user_id)
     db.session.add(hold)
     db.session.commit()
@@ -349,7 +355,10 @@ def addskip(id):
     holds = Hold.query.filter_by(user_id=user_id).all()
     skips = Skip.query.filter_by(user_id=user_id).all()
 
-    trans, run, _ = update_cash(float(balance.amount), schedules, holds, skips)
+    trans, run, _ = update_cash(float(balance.amount) if balance else 0.0, schedules, holds, skips)
+    if int(id) not in trans.index:
+        flash("Transaction not found")
+        return redirect(url_for('main.transactions'))
     transaction = trans.loc[int(id)]
     trans_type = ""
     if transaction['type'] == "Expense":
@@ -689,7 +698,7 @@ def balance():
                 record_manual_balance_entry(owner)
                 db.session.commit()
 
-        return redirect(url_for('main.index'))
+    return redirect(url_for('main.index'))
 
 
 @main.route('/changepw', methods=('GET', 'POST'))
@@ -807,7 +816,7 @@ def transactions():
     holds = Hold.query.filter_by(user_id=user_id).all()
     skips = Skip.query.filter_by(user_id=user_id).all()
 
-    trans, run, _ = update_cash(float(balance.amount), schedules, holds, skips)
+    trans, run, _ = update_cash(float(balance.amount) if balance else 0.0, schedules, holds, skips)
 
     return render_template('transactions_table.html', total=trans.to_dict(orient='records'))
 

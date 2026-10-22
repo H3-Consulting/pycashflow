@@ -302,10 +302,20 @@ def signup_post():
     if external_signup_url:
         return redirect(external_signup_url)
 
+    # Disabling sign-ups must block account creation, not just hide the form.
+    setting = Settings.query.filter_by(name='signup').first()
+    if setting and setting.value:
+        flash('Sign-ups are currently disabled')
+        return redirect(url_for('auth.login'))
+
     # code to validate and add user to database goes here
     email = (request.form.get('email') or '').strip().lower()
     name = request.form.get('name')
     password = request.form.get('password')
+
+    if not email or not password:
+        flash('Email and password are required')
+        return redirect(url_for('auth.signup'))
 
     user = User.query.filter_by(email=email).first() # if this returns a user, then the email already exists in database
 
