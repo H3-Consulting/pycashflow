@@ -123,7 +123,9 @@ jobs:
             org.opencontainers.image.revision=${{ steps.version.outputs.sha }}
             org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The layer cache is only a speed-up; a GitHub cache service hiccup
+          # ("failed to reserve cache") must not fail the build.
+          cache-to: type=gha,mode=max,ignore-error=true
 
       - name: Smoke test image
         run: .github/scripts/docker-smoke-test.sh "${IMAGE}:${{ steps.version.outputs.version }}" "${{ steps.version.outputs.version }}"

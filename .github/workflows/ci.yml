@@ -65,7 +65,9 @@ jobs:
           tags: pycashflow:ci
           build-args: DOCKER_TAG=ci-${{ github.sha }}
           cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # The layer cache is only a speed-up; a GitHub cache service hiccup
+          # ("failed to reserve cache") must not fail the build.
+          cache-to: type=gha,mode=max,ignore-error=true
 
       - name: Smoke test image
         run: .github/scripts/docker-smoke-test.sh pycashflow:ci "ci-${{ github.sha }}"
