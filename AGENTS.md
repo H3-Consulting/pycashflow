@@ -128,7 +128,12 @@ pip install -r requirements-dev.txt -c constraints.txt   # adds pytest + pytest-
 python -m pytest -q
 ```
 
-Tests use an in-memory SQLite database. No external services required.
+Tests use an in-memory SQLite database by default; no external services
+required. To run them against PostgreSQL (as CI always does), point
+`TEST_DATABASE_URL` at an empty database, e.g.
+`TEST_DATABASE_URL=postgresql://test:test@localhost:5432/pycashflow_test`.
+PostgreSQL enforces foreign keys that SQLite ignores, so tests must use real
+users (`make_user`) and delete dependent rows before deleting a user.
 All tests should pass (~700). `LegacyAPIWarning` deprecation warnings from
 SQLAlchemy are known and non-blocking.
 
@@ -140,13 +145,14 @@ seeded admin.
 ### CI and releases
 
 - `.github/workflows/ci.yml` runs on every PR to `master` (iOS-only changes
-  skipped): the test suite on Python 3.11 and 3.15, plus a Docker build and
-  `.github/scripts/docker-smoke-test.sh` (boots the image, logs in, loads the
-  dashboard).
+  skipped): the test suite on Python 3.11 and 3.15, each against both SQLite
+  and PostgreSQL, plus a Docker build and `.github/scripts/docker-smoke-test.sh`
+  (boots the image, logs in, loads the dashboard) against SQLite and against
+  PostgreSQL via a plain `postgresql://` URL (`SMOKE_DB=postgres`).
 - `.github/workflows/release.yml` runs when a PR is merged: bumps the version
   from the latest `vX.Y.Z` tag (patch by default; `release:minor` /
   `release:major` labels bump more, `release:skip` publishes nothing), runs the
-  tests, builds and smoke-tests the image, pushes `whahn1983/pycashflow:<version>`
+  tests on SQLite and PostgreSQL, builds and smoke-tests the image on both, pushes `whahn1983/pycashflow:<version>`
   and `:latest`, then creates the `v<version>` tag and GitHub release.
   Requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
 

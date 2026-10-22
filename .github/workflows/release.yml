@@ -50,6 +50,20 @@ jobs:
       (github.event.pull_request.merged == true &&
        !contains(github.event.pull_request.labels.*.name, 'release:skip'))
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: pycashflow_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U test -d pycashflow_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - uses: actions/checkout@v5
         with:
@@ -99,11 +113,19 @@ jobs:
             requirements-dev.txt
             constraints.txt
 
-      - name: Run tests
+      - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-dev.txt -c constraints.txt
-          python -m pytest -q
+
+      - name: Run tests (SQLite)
+        run: python -m pytest -q
+
+      # Production deploys use PostgreSQL; a release never ships without it.
+      - name: Run tests (PostgreSQL)
+        env:
+          TEST_DATABASE_URL: postgresql://test:test@localhost:5432/pycashflow_test
+        run: python -m pytest -q
 
       - uses: docker/setup-buildx-action@v3
 
@@ -127,7 +149,12 @@ jobs:
           # ("failed to reserve cache") must not fail the build.
           cache-to: type=gha,mode=max,ignore-error=true
 
-      - name: Smoke test image
+      - name: Smoke test image (SQLite)
+        run: .github/scripts/docker-smoke-test.sh "${IMAGE}:${{ steps.version.outputs.version }}" "${{ steps.version.outputs.version }}"
+
+      - name: Smoke test image (PostgreSQL)
+        env:
+          SMOKE_DB: postgres
         run: .github/scripts/docker-smoke-test.sh "${IMAGE}:${{ steps.version.outputs.version }}" "${{ steps.version.outputs.version }}"
 
       - name: Log in to Docker Hub

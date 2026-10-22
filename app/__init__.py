@@ -68,6 +68,23 @@ _CONTENT_SECURITY_POLICY = "; ".join(
 )
 
 
+def normalize_database_url(url):
+    """Pin driverless PostgreSQL URLs to the psycopg2 driver the app ships.
+
+    Hosts such as DigitalOcean hand out ``postgresql://`` (or the legacy
+    ``postgres://``) URLs with no driver. SQLAlchemy 2.1 changed the default
+    driver for those from psycopg2 to psycopg 3, which is not installed, so
+    the app would fail to start. URLs that already name a driver
+    (``postgresql+psycopg://``) and non-PostgreSQL URLs are returned as-is.
+    """
+    if not url:
+        return url
+    for prefix in ('postgresql://', 'postgres://'):
+        if url.startswith(prefix):
+            return 'postgresql+psycopg2://' + url[len(prefix):]
+    return url
+
+
 def create_app():
 
     app = Flask(__name__, static_url_path='/static')
@@ -133,8 +150,9 @@ def create_app():
     app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY') or secrets.token_urlsafe(32)
 
     # app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///db.sqlite'
-    app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL') or \
-    'sqlite:///' + os.path.join(basedir, 'data/db.sqlite')
+    app.config['SQLALCHEMY_DATABASE_URI'] = normalize_database_url(
+        os.environ.get('DATABASE_URL')
+    ) or 'sqlite:///' + os.path.join(basedir, 'data/db.sqlite')
 
     # Harden session and remember-me cookies.
     # SESSION_COOKIE_SECURE defaults to True; set SESSION_COOKIE_SECURE=false in .env
