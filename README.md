@@ -991,6 +991,11 @@ docker rm pycashflow
 # Run the docker run command again with your volume mounts
 ```
 
+Every merged change publishes a new image tagged with its version (for example
+`whahn1983/pycashflow:4.5.8`, matching GitHub release `v4.5.8`) and moves
+`latest` to it. Pin a version tag instead of `latest` if you want to control
+when upgrades happen.
+
 ### Updating Manual Installation
 
 ```bash

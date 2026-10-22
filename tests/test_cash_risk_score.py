@@ -25,6 +25,13 @@ import unittest.mock as mock
 
 _APP_DIR = os.path.join(os.path.dirname(__file__), '..', 'app')
 
+# Remember the real modules so they can be restored once cashflow.py is loaded;
+# leaving the stubs in sys.modules would leak a MagicMock ``db`` into every
+# later test module that lazily does ``from app import db``.
+_SAVED_MODULES = {
+    name: sys.modules.get(name) for name in ('app', 'app.models', 'app.cashflow')
+}
+
 # Stub the app package itself (needs __path__ so relative imports inside cashflow work)
 _app_stub = types.ModuleType('app')
 _app_stub.__path__ = [_APP_DIR]
@@ -47,6 +54,12 @@ _cashflow_mod = importlib.util.module_from_spec(_spec)
 _cashflow_mod.__package__ = 'app'
 sys.modules['app.cashflow'] = _cashflow_mod
 _spec.loader.exec_module(_cashflow_mod)
+
+for _name, _module in _SAVED_MODULES.items():
+    if _module is None:
+        sys.modules.pop(_name, None)
+    else:
+        sys.modules[_name] = _module
 
 calculate_cash_risk_score = _cashflow_mod.calculate_cash_risk_score
 

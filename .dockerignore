@@ -6,3 +6,5 @@ __pycache__/
 *.pyo
 .env
 ios-app/
+.github/
+.pytest_cache/

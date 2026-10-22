@@ -25,14 +25,12 @@ def export(user_id):
     Args:
         user_id: The user ID to filter schedules
     """
-    try:
-        engine = db.create_engine(os.environ.get('DATABASE_URL')).connect()
-    except Exception as exc:
-        logger.warning("DATABASE_URL connection failed, falling back to SQLite: %s", exc)
-        engine = db.create_engine('sqlite:///db.sqlite').connect()
-
-    # pull the schedule information for this user only
-    df = pd.read_sql(text('SELECT * FROM schedule WHERE user_id = :uid'), engine, params={'uid': user_id})
+    # Reuse the app's configured engine so export reads the same database as
+    # the rest of the app (including the default app/data/db.sqlite path when
+    # DATABASE_URL is unset).
+    with db.engine.connect() as conn:
+        # pull the schedule information for this user only
+        df = pd.read_sql(text('SELECT * FROM schedule WHERE user_id = :uid'), conn, params={'uid': user_id})
     df = df.sort_values(by="startdate",
                         key=lambda x: np.argsort(index_natsorted(df["startdate"]))).reset_index(drop=True)
 

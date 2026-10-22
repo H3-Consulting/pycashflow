@@ -63,7 +63,7 @@ pycashflow/
 │   └── test_passkey_auth.py   # WebAuthn/passkey tests
 ├── requirements.txt           # 20 Python dependencies
 ├── pyproject.toml             # Pytest configuration
-├── Dockerfile                 # Alpine + Python 3.11 container
+├── Dockerfile                 # Alpine + Python 3.15 container
 ├── entry.sh                   # Container entrypoint (migrate + waitress)
 ├── API_CONVENTIONS.md         # API response/error shape spec
 ├── AUTH_API.md                # Bearer token auth guide
@@ -124,12 +124,31 @@ flask run --debug
 ### Run tests
 
 ```bash
+pip install -r requirements-dev.txt -c constraints.txt   # adds pytest + pytest-cov
 python -m pytest -q
 ```
 
 Tests use an in-memory SQLite database. No external services required.
-All 173 tests should pass. Expect 38 `LegacyAPIWarning` deprecation warnings
-from SQLAlchemy — these are known and non-blocking.
+All tests should pass (~700). `LegacyAPIWarning` deprecation warnings from
+SQLAlchemy are known and non-blocking.
+
+Web-route tests live in `tests/test_web_*.py` alongside `tests/test_routes.py`.
+Use the `make_user`, `login_as`, `fresh`, and `web_models` fixtures from
+`conftest.py` so each test gets isolated users instead of mutating the shared
+seeded admin.
+
+### CI and releases
+
+- `.github/workflows/ci.yml` runs on every PR to `master` (iOS-only changes
+  skipped): the test suite on Python 3.11 and 3.15, plus a Docker build and
+  `.github/scripts/docker-smoke-test.sh` (boots the image, logs in, loads the
+  dashboard).
+- `.github/workflows/release.yml` runs when a PR is merged: bumps the version
+  from the latest `vX.Y.Z` tag (patch by default; `release:minor` /
+  `release:major` labels bump more, `release:skip` publishes nothing), runs the
+  tests, builds and smoke-tests the image, pushes `whahn1983/pycashflow:<version>`
+  and `:latest`, then creates the `v<version>` tag and GitHub release.
+  Requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
 
 ---
 
@@ -287,7 +306,7 @@ their own credentials.
    Understand the patterns in use — do not introduce competing patterns.
 
 3. **Run tests after every change.** `python -m pytest -q` should pass all
-   173+ tests. Do not commit code that breaks existing tests.
+   tests. Do not commit code that breaks existing tests.
 
 4. **Add tests for new endpoints.** Follow the patterns in
    `test_api_foundation.py` and `test_api_data.py`. Test both success paths

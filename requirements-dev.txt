@@ -1,0 +1,5 @@
+# Test/CI tooling. Install with:
+#   pip install -r requirements-dev.txt -c constraints.txt
+-r requirements.txt
+pytest
+pytest-cov
