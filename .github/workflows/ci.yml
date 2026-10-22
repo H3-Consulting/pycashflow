@@ -25,9 +25,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # 3.11 is the documented minimum for manual installs; 3.14 matches
-        # the python:3.14-alpine base image used by the Dockerfile.
-        python-version: ["3.11", "3.14"]
+        # 3.11 is the documented minimum for manual installs; 3.15 matches
+        # the python:3.15-alpine base image used by the Dockerfile.
+        python-version: ["3.11", "3.15"]
     steps:
       - uses: actions/checkout@v5
 

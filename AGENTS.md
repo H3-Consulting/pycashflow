@@ -63,7 +63,7 @@ pycashflow/
 │   └── test_passkey_auth.py   # WebAuthn/passkey tests
 ├── requirements.txt           # 20 Python dependencies
 ├── pyproject.toml             # Pytest configuration
-├── Dockerfile                 # Alpine + Python 3.11 container
+├── Dockerfile                 # Alpine + Python 3.15 container
 ├── entry.sh                   # Container entrypoint (migrate + waitress)
 ├── API_CONVENTIONS.md         # API response/error shape spec
 ├── AUTH_API.md                # Bearer token auth guide
@@ -140,7 +140,7 @@ seeded admin.
 ### CI and releases
 
 - `.github/workflows/ci.yml` runs on every PR to `master` (iOS-only changes
-  skipped): the test suite on Python 3.11 and 3.14, plus a Docker build and
+  skipped): the test suite on Python 3.11 and 3.15, plus a Docker build and
   `.github/scripts/docker-smoke-test.sh` (boots the image, logs in, loads the
   dashboard).
 - `.github/workflows/release.yml` runs when a PR is merged: bumps the version
