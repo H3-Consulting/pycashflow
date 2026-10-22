@@ -1,0 +1,163 @@
+name: Release Docker image
+
+# On every merged pull request: compute the next semantic version from the
+# latest vX.Y.Z git tag, run the test suite against the merged commit, build
+# the image, smoke-test it, push <version> and latest to Docker Hub, and then
+# tag the commit and publish a GitHub release.
+#
+# Version bump is patch by default. Add a label to the PR to change it:
+#   release:minor  -> X.(Y+1).0
+#   release:major  -> (X+1).0.0
+#   release:skip   -> merge without publishing an image
+#
+# Required repository secrets:
+#   DOCKERHUB_USERNAME  Docker Hub account that can push whahn1983/pycashflow
+#   DOCKERHUB_TOKEN     Docker Hub access token (Read & Write) for that account
+#
+# pull_request_target (not pull_request) is used so the Docker Hub secrets are
+# available for merged PRs from forks too. It is safe here because the job only
+# runs after a maintainer has merged, and it checks out the merge commit that
+# is already on master rather than the PR head.
+on:
+  pull_request_target:
+    branches: [master]
+    types: [closed]
+    paths-ignore:
+      - "ios-app/**"
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: Version component to bump
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write
+
+# Serialize releases so two quick merges can't compute the same version.
+concurrency:
+  group: docker-release
+  cancel-in-progress: false
+
+env:
+  IMAGE: whahn1983/pycashflow
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.merged == true &&
+       !contains(github.event.pull_request.labels.*.name, 'release:skip'))
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Compute next version
+        id: version
+        env:
+          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
+          BUMP_INPUT: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          git fetch --tags --force --quiet
+          latest="$(git tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname | head -n1)"
+          latest="${latest:-v0.0.0}"
+          IFS=. read -r major minor patch <<< "${latest#v}"
+
+          bump="${BUMP_INPUT:-patch}"
+          case ",${PR_LABELS}," in
+            *,release:major,*) bump=major ;;
+            *,release:minor,*) bump=minor ;;
+          esac
+
+          case "${bump}" in
+            major) major=$((major + 1)); minor=0; patch=0 ;;
+            minor) minor=$((minor + 1)); patch=0 ;;
+            *)     patch=$((patch + 1)) ;;
+          esac
+
+          version="${major}.${minor}.${patch}"
+          if git rev-parse -q --verify "refs/tags/v${version}" >/dev/null; then
+            echo "Tag v${version} already exists" >&2
+            exit 1
+          fi
+          echo "Previous release: ${latest}; bump: ${bump}; new version: ${version}"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            constraints.txt
+
+      - name: Run tests
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt -c constraints.txt
+          python -m pytest -q
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          push: false
+          tags: |
+            ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+            ${{ env.IMAGE }}:latest
+          build-args: DOCKER_TAG=${{ steps.version.outputs.version }}
+          labels: |
+            org.opencontainers.image.title=pycashflow
+            org.opencontainers.image.version=${{ steps.version.outputs.version }}
+            org.opencontainers.image.revision=${{ steps.version.outputs.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Smoke test image
+        run: .github/scripts/docker-smoke-test.sh "${IMAGE}:${{ steps.version.outputs.version }}" "${{ steps.version.outputs.version }}"
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # Push the exact image that just passed the smoke test.
+      - name: Push image
+        run: |
+          docker push "${IMAGE}:${{ steps.version.outputs.version }}"
+          docker push "${IMAGE}:latest"
+
+      - name: Tag commit and publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          SHA: ${{ steps.version.outputs.sha }}
+        run: |
+          gh release create "${TAG}" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --target "${SHA}" \
+            --title "${TAG}" \
+            --generate-notes
+
+      - name: Summary
+        run: |
+          {
+            echo "### Published ${IMAGE}:${{ steps.version.outputs.version }}"
+            echo ""
+            echo "- \`docker pull ${IMAGE}:${{ steps.version.outputs.version }}\`"
+            echo "- \`docker pull ${IMAGE}:latest\`"
+            echo "- Git tag / release: \`${{ steps.version.outputs.tag }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
