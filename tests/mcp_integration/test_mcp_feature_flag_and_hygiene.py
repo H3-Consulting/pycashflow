@@ -146,3 +146,14 @@ def test_redaction_filter_scrubs_authlib_debug_output(caplog):
         logging.getLogger("authlib").setLevel(previous)
     assert "SECRETVALUE123" not in caplog.text and "ALSOSECRET" not in caplog.text
     assert "pcf_at_[REDACTED]" in caplog.text
+
+
+def test_openai_domain_verification_token(client, flask_app):
+    assert client.get("/.well-known/openai-apps-challenge").status_code == 404
+    flask_app.config["OPENAI_APPS_CHALLENGE_TOKEN"] = "verify-abc123"
+    try:
+        resp = client.get("/.well-known/openai-apps-challenge")
+        assert resp.status_code == 200 and resp.get_data(as_text=True) == "verify-abc123"
+        assert resp.mimetype == "text/plain"
+    finally:
+        flask_app.config["OPENAI_APPS_CHALLENGE_TOKEN"] = ""

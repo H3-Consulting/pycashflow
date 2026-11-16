@@ -78,11 +78,11 @@ def success(model: BaseModel) -> CallToolResult:
 
 def error_result(code: str, message: str, *, details: dict | None = None,
                  correlation_id: str | None = None, meta: dict | None = None) -> CallToolResult:
+    # correlation_id is recorded in the audit log only: hosts ask servers not
+    # to return trace/request identifiers in tool results.
     body = {"error": {"code": code, "message": message}}
     if details:
         body["error"]["details"] = details
-    if correlation_id:
-        body["error"]["correlation_id"] = correlation_id
     return CallToolResult(
         content=[TextContent(type="text", text=_json_text(body))],
         structured_content=body,

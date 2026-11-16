@@ -62,8 +62,7 @@ def register(mcp, runner) -> None:
             ids = schedule_ids_by_name(principal.effective_user_id)
             created = hold_out(hold, ids)
             return HoldWriteOut(action="created", hold=created, removed=None,
-                                projection_after_change=projection_after_change(principal),
-                                correlation_id=cid)
+                                projection_after_change=projection_after_change(principal))
 
         # schedules:read too: the result reveals the referenced schedule.
         return await runner.run(ctx, tool="create_hold", scopes=[S.HOLDS_WRITE, S.SCHEDULES_READ], fn=body,
@@ -73,7 +72,7 @@ def register(mcp, runner) -> None:
 
     mcp.add_tool(create_hold, name="create_hold", title="Create hold",
                  description=(f"Create a hold from an existing schedule (schedule_id). {HOLD_SEMANTICS} "
-                              "Refused if that schedule already has a hold. Confirm with the user first. "
+                              "Refused if that schedule already has a hold. "
                               "Saving also runs projection maintenance. Requires holds:write and schedules:read."),
                  annotations=mutating("Create hold", idempotent=False),
                  meta=security_meta([S.HOLDS_WRITE, S.SCHEDULES_READ]))
@@ -86,8 +85,7 @@ def register(mcp, runner) -> None:
             removed = records.remove_hold(principal.effective_user_id, hold_id)
             removed["amount"] = f"{removed['amount']:.2f}" if removed.get("amount") is not None else None
             return HoldWriteOut(action="removed", hold=None, removed=removed,
-                                projection_after_change=projection_after_change(principal),
-                                correlation_id=cid)
+                                projection_after_change=projection_after_change(principal))
 
         return await runner.run(ctx, tool="remove_hold", scopes=[S.HOLDS_WRITE], fn=body, write=True,
                                 resource_type="hold", idempotency_key=idempotency_key,
@@ -130,8 +128,7 @@ def register(mcp, runner) -> None:
             ids = schedule_ids_by_name(principal.effective_user_id)
             created = skip_out(skip, ids)
             return SkipWriteOut(action="created", skip=created, removed=None,
-                                projection_after_change=projection_after_change(principal),
-                                correlation_id=cid)
+                                projection_after_change=projection_after_change(principal))
 
         # Resolving occurrences runs the projection and reveals schedule dates.
         return await runner.run(ctx, tool="create_skip",
@@ -143,8 +140,8 @@ def register(mcp, runner) -> None:
                  description=(f"Skip one specific future occurrence of a schedule. {SKIP_SEMANTICS} Identify "
                               "the occurrence by schedule_id and occurrence_date (from list_upcoming_transactions). "
                               "If occurrence_date is missing or does not match a real upcoming occurrence, nothing "
-                              "is saved and a clarification_required error lists valid dates — ask the user which "
-                              "one they mean; never guess. Already-skipped occurrences are refused. Also runs "
+                              "is saved and a clarification_required error lists the valid upcoming dates. "
+                              "Already-skipped occurrences are refused. Also runs "
                               "projection maintenance. Requires skips:write, schedules:read and projections:read."),
                  annotations=mutating("Skip one occurrence", idempotent=False),
                  meta=security_meta([S.SKIPS_WRITE, S.SCHEDULES_READ, S.PROJECTIONS_READ]))
@@ -162,8 +159,7 @@ def register(mcp, runner) -> None:
                 "type": removed["type"],
             }
             return SkipWriteOut(action="removed", skip=None, removed=removed,
-                                projection_after_change=projection_after_change(principal),
-                                correlation_id=cid)
+                                projection_after_change=projection_after_change(principal))
 
         return await runner.run(ctx, tool="remove_skip", scopes=[S.SKIPS_WRITE], fn=body, write=True,
                                 resource_type="skip", idempotency_key=idempotency_key,

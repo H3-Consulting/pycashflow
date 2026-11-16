@@ -207,7 +207,6 @@ class ItemWriteOut(BaseModel):
     item: ItemOut | None
     deleted: dict | None
     projection_after_change: ProjectionAfterChange | None
-    correlation_id: str
     replayed: bool = False
 
 
@@ -216,7 +215,6 @@ class HoldWriteOut(BaseModel):
     hold: HoldOut | None
     removed: dict | None
     projection_after_change: ProjectionAfterChange | None
-    correlation_id: str
     replayed: bool = False
 
 
@@ -225,5 +223,4 @@ class SkipWriteOut(BaseModel):
     skip: SkipOut | None
     removed: dict | None
     projection_after_change: ProjectionAfterChange | None
-    correlation_id: str
     replayed: bool = False

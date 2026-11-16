@@ -101,6 +101,16 @@ def protected_resource_metadata_view():
     return _json_metadata(protected_resource_metadata(_config()))
 
 
+@oauth_bp.route("/.well-known/openai-apps-challenge", methods=["GET"])
+@limiter.exempt
+def openai_apps_challenge():
+    """Serve the OpenAI plugin portal's domain-verification token, if set."""
+    token = current_app.config.get("OPENAI_APPS_CHALLENGE_TOKEN") or ""
+    if not token or len(token) > 512 or not token.isprintable():
+        abort(404)
+    return current_app.response_class(token, mimetype="text/plain")
+
+
 # ── Registration, token, revocation (machine endpoints, CSRF-exempt) ─────────
 
 

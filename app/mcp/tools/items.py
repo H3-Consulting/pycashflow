@@ -98,8 +98,7 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
             record = records.create_item(kind, principal.effective_user_id, dict(payload))
             created = item_out(record)
             return ItemWriteOut(action="created", item=created, deleted=None,
-                                projection_after_change=projection_after_change(principal),
-                                correlation_id=cid)
+                                projection_after_change=projection_after_change(principal))
 
         return await runner.run(ctx, tool=f"create_{noun}", scopes=[write_scope], fn=body, write=True,
                                 resource_type=noun, idempotency_key=idempotency_key,
@@ -107,8 +106,8 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
 
     _add(mcp, create_impl, name=f"create_{noun}", title=f"Create {noun}",
          description=(f"Create a new {noun}. {semantics} {_FREQ_HELP} Names must be unique within the "
-                      f"account. Returns the saved {noun} and the updated projection summary. Ask the user "
-                      f"to confirm the details before calling. Saving also runs projection maintenance. "
+                      f"account. Changes stored financial data. Returns the saved {noun} and the updated "
+                      f"projection summary. Saving also runs projection maintenance. "
                       f"Requires {write_scope}."),
          annotations=mutating(f"Create {noun}", idempotent=False), scopes=[write_scope])
 
@@ -131,8 +130,7 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
             record = records.update_item(kind, principal.effective_user_id, item_id, changes,
                                          expected_etag=expected_etag)
             return ItemWriteOut(action="updated", item=item_out(record), deleted=None,
-                                projection_after_change=projection_after_change(principal),
-                                correlation_id=cid)
+                                projection_after_change=projection_after_change(principal))
 
         return await runner.run(ctx, tool=f"update_{noun}", scopes=[write_scope], fn=body, write=True,
                                 resource_type=noun, idempotency_key=idempotency_key,
@@ -143,7 +141,7 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
                       f"all others keep their current values. Changing start_date to a different day of the "
                       f"month also resets the day-of-month anchor, exactly like the web app. Pass expected_etag "
                       f"from get_{noun} or preview_change so the update is refused if the {noun} changed in the "
-                      f"meantime. Consider preview_change first and confirm with the user. Saving also runs "
+                      f"meantime. preview_change shows the impact of the same change without saving it. Saving also runs "
                       f"projection maintenance. Requires {write_scope}."),
          annotations=mutating(f"Update {noun}", idempotent=True), scopes=[write_scope],
          rename={"item_id": f"{noun}_id"})
@@ -166,8 +164,7 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
                 "start_date": snapshot["startdate"].isoformat() if snapshot["startdate"] else None,
             }
             return ItemWriteOut(action="deleted", item=None, deleted=deleted,
-                                projection_after_change=projection_after_change(principal),
-                                correlation_id=cid)
+                                projection_after_change=projection_after_change(principal))
 
         return await runner.run(ctx, tool=f"delete_{noun}", scopes=[write_scope], fn=body, write=True,
                                 resource_type=noun, idempotency_key=idempotency_key,
@@ -175,8 +172,8 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
 
     _add(mcp, delete_impl, name=f"delete_{noun}", title=f"Delete {noun}",
          description=(f"Permanently delete one {noun} ({noun}_id). Only that {noun} is removed. This cannot be "
-                      f"undone: confirm with the user first and pass confirm=true. Pass expected_etag to make "
-                      f"sure you delete the version the user saw. Saving also runs projection maintenance. "
+                      f"undone and requires confirm=true. With expected_etag the delete only happens if the {noun} "
+                      f"is unchanged since it was read. Saving also runs projection maintenance. "
                       f"Requires {write_scope}."),
          annotations=mutating(f"Delete {noun}", idempotent=True), scopes=[write_scope],
          rename={"item_id": f"{noun}_id"})

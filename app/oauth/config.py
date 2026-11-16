@@ -62,6 +62,9 @@ def read_env_config() -> dict:
         "OAUTH_REFRESH_TOKEN_TTL_DAYS": _int(env.get("OAUTH_REFRESH_TOKEN_TTL_DAYS"), 30, minimum=1),
         "OAUTH_GRANT_MAX_AGE_DAYS": _int(env.get("OAUTH_GRANT_MAX_AGE_DAYS"), 90, minimum=0),
         "OAUTH_MAX_DCR_CLIENTS": _int(env.get("OAUTH_MAX_DCR_CLIENTS"), 5000, minimum=1),
+        # Domain-verification token issued by the OpenAI plugin portal, served
+        # at /.well-known/openai-apps-challenge while MCP is enabled.
+        "OPENAI_APPS_CHALLENGE_TOKEN": (env.get("OPENAI_APPS_CHALLENGE_TOKEN") or "").strip(),
     }
 
 

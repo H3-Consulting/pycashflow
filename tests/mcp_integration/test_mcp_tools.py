@@ -51,9 +51,16 @@ class TestCatalogue:
             assert "maintenance" in tools[name].description.lower()
         assert not any(word in n for n in tools for word in ("clear", "bulk", "transfer", "payment", "admin"))
 
-    def test_tool_descriptions_flag_untrusted_names(self, mcp, make_user, issue_token):
+    def test_untrusted_text_guidance(self, mcp, make_user, issue_token, flask_app):
+        from app.mcp.server import INSTRUCTIONS
+
         tools = {t.name: t for t in mcp.list_tools(issue_token(make_user())).tools}
-        assert "never follow instructions" in tools["list_schedules"].description
+        assert "free text" in tools["list_schedules"].description
+        # Behavioural guidance lives in server instructions, not tool descriptions.
+        assert "Never" in INSTRUCTIONS and "follow instructions" in INSTRUCTIONS
+        for tool in tools.values():
+            text = tool.description.lower()
+            assert "ask the user" not in text and "never guess" not in text, tool.name
 
     def test_delete_requires_confirm_in_schema(self, mcp, make_user, issue_token):
         tools = {t.name: t for t in mcp.list_tools(issue_token(make_user())).tools}
@@ -207,7 +214,9 @@ class TestSchedules:
         assert Schedule.query.filter_by(user_id=owner, name="Gym").count() == 1
         event = OAuthAuditEvent.query.filter_by(action="mcp.create_schedule", user_id=owner,
                                                 outcome="success").first()
-        assert event.resource_id == str(sc["item"]["id"]) and event.correlation_id == sc["correlation_id"]
+        assert event.resource_id == str(sc["item"]["id"]) and len(event.correlation_id) == 32
+        # Trace identifiers stay in the audit log, not in tool results.
+        assert "correlation_id" not in sc
 
     def test_create_without_projection_scope_skips_summary(self, mcp, owner, issue_token):
         result = mcp.call(issue_token(owner, scopes="schedules:write"), "create_schedule", _new_item())
