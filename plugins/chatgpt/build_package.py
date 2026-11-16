@@ -19,6 +19,10 @@ Checks performed before packaging:
 * five positive and three negative review test cases
 * referenced assets exist, are square, 48..4096 px, <= 5 MiB
 * no ``REPLACE`` placeholders unless --allow-placeholders (for dry runs)
+
+Exit status: 0 when the ZIP was built, 1 when the package is invalid, and
+3 when it is valid apart from ``REPLACE`` placeholders (nothing is built).
+The GitHub workflow ``chatgpt-package.yml`` treats 3 as "not ready yet".
 """
 
 from __future__ import annotations
@@ -39,6 +43,8 @@ SCHEMA_URLS = {
 FIXED_DATE = (1980, 1, 1, 0, 0, 0)
 LIMITS = {"displayName": 30, "shortDescription": 30, "longDescription": 4000, "developerName": 80}
 URL_FIELDS = ("websiteURL", "supportURL", "privacyPolicyURL", "termsOfServiceURL")
+EXIT_INVALID = 1
+EXIT_PLACEHOLDERS = 3
 
 
 class PackageError(Exception):
@@ -184,13 +190,14 @@ def main(argv=None) -> int:
     referenced, _review = validate_listing(plugin, problems)
     validate_mcp(mcp, problems)
     validate_assets(referenced, problems)
-    placeholders = find_placeholders(plugin, mcp)
-    if placeholders and not args.allow_placeholders:
-        problems.append(f"unresolved placeholders: {', '.join(placeholders)}")
     if problems:
         for problem in problems:
             print(f"error: {problem}", file=sys.stderr)
-        return 1
+        return EXIT_INVALID
+    placeholders = find_placeholders(plugin, mcp)
+    if placeholders and not args.allow_placeholders:
+        print(f"error: unresolved placeholders: {', '.join(placeholders)}", file=sys.stderr)
+        return EXIT_PLACEHOLDERS
 
     files = ["plugin.json", "mcp.json", *(p[2:] for p in referenced)]
     staged_mcp = HERE / "mcp.json"
@@ -214,4 +221,4 @@ if __name__ == "__main__":
         sys.exit(main())
     except PackageError as exc:
         print(f"error: {exc}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_INVALID)

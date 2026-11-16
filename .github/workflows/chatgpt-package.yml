@@ -1,0 +1,94 @@
+name: ChatGPT plugin package
+
+# Builds the ChatGPT plugin ZIP (plugins/chatgpt) when a merge to master
+# changes the package, and attaches it to the run as an unzipped artifact,
+# ready to upload by hand at platform.openai.com/plugins. Nothing is submitted
+# to OpenAI from here.
+#
+# build_package.py validates the manifest against the published Agent Plugins
+# schemas, OpenAI's listing limits, the review test cases and the assets.
+# Exit status 3 means the package is valid but still has REPLACE_* review
+# placeholders (for example the demo recording URL): the run then succeeds
+# with a warning and uploads nothing. Any other failure fails the run.
+on:
+  push:
+    branches: [master]
+    paths:
+      - "plugins/chatgpt/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: chatgpt-package
+  cancel-in-progress: false
+
+jobs:
+  package:
+    name: Build ChatGPT plugin ZIP
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            constraints.txt
+
+      - name: Install dependencies
+        # jsonschema and Pillow come from the app's pinned requirements.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -c constraints.txt
+
+      - name: Validate and build
+        id: build
+        run: |
+          set +e
+          python plugins/chatgpt/build_package.py > build.log 2>&1
+          status=$?
+          set -e
+          cat build.log
+          if [ "$status" -eq 3 ]; then
+            echo "built=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=ChatGPT package not built::Review placeholders remain in plugins/chatgpt/plugin.json. Replace them and merge again, or re-run this workflow."
+            {
+              echo "### ChatGPT plugin package not built"
+              echo
+              echo "The package is valid but still contains review placeholders:"
+              echo
+              echo '```'
+              grep 'placeholders' build.log
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$status" -ne 0 ]; then
+            exit "$status"
+          fi
+          version=$(python -c 'import json; print(json.load(open("plugins/chatgpt/plugin.json"))["version"])')
+          sha=$(awk '/^sha256 /{print $2}' build.log)
+          echo "built=true" >> "$GITHUB_OUTPUT"
+          echo "zip=plugins/chatgpt/dist/pycashflow-chatgpt-${version}.zip" >> "$GITHUB_OUTPUT"
+          {
+            echo "### ChatGPT plugin package ${version}"
+            echo
+            echo "- Artifact: \`pycashflow-chatgpt-${version}.zip\` (download it from this run)"
+            echo "- SHA-256: \`${sha}\`"
+            echo "- Upload it at platform.openai.com/plugins only after approval."
+            echo "- Bump \`version\` in plugin.json before every re-upload."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload package
+        if: steps.build.outputs.built == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          path: ${{ steps.build.outputs.zip }}
+          # Upload the ZIP itself rather than a ZIP wrapped in another ZIP.
+          archive: false
+          if-no-files-found: error
+          retention-days: 90

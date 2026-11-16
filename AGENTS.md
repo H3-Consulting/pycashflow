@@ -160,6 +160,11 @@ seeded admin.
   tests on SQLite and PostgreSQL, builds and smoke-tests the image on both, pushes `whahn1983/pycashflow:<version>`
   and `:latest`, then creates the `v<version>` tag and GitHub release.
   Requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
+- `.github/workflows/chatgpt-package.yml` runs on pushes to `master` that
+  change `plugins/chatgpt/**` (and on demand): validates the ChatGPT plugin
+  package and uploads `pycashflow-chatgpt-<version>.zip` as a run artifact.
+  While `REPLACE_*` review placeholders remain it only warns
+  (`build_package.py` exit status 3). It never submits anything.
 
 ---
 

@@ -91,6 +91,7 @@ Added:
 - `app/templates/{oauth_consent,oauth_error,connected_apps}.html`
 - `migrations/versions/b7c8d9e0f1a2_add_oauth_and_mcp_tables.py`
 - `plugins/chatgpt/{README.md,plugin.json,mcp.json,build_package.py,skills/get-started/SKILL.md,assets/icon.png,assets/logo.png}`
+- `.github/workflows/chatgpt-package.yml` (builds the ChatGPT ZIP on merge), `tests/test_chatgpt_package.py`
 - `docs/mcp/*.md`
 - `tests/test_services.py`, `tests/mcp_integration/*`
 

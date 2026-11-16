@@ -49,11 +49,15 @@ non-code items:
    CIMD).
 2. Connect from ChatGPT developer mode, Claude custom connector, Claude Code and
    MCP Inspector; run the review test prompts.
-3. Update the privacy policy for AI-assistant connections; add a support page
-   with contact details; publish a short "Use PyCashFlow with ChatGPT/Claude"
-   help article.
-4. Create the dedicated reviewer account (no MFA, sample data, review-user
-   flag) and record the demo video; then build the ChatGPT ZIP.
+3. Merge H3-Consulting/pycashflow-site#35, which covers AI-assistant
+   connections in the privacy policy (new Section 5) and terms (new
+   Section 12) and adds `/support` with contact details and the ChatGPT/Claude
+   help article. It updates both effective dates; decide on the 30-day
+   material-change notice both documents promise.
+4. Prepare the reviewer account (password-only account owner, sample data,
+   review-user flag; see `plugins/chatgpt/README.md`) and record the demo
+   video. Merging the recording URL into `plugins/chatgpt/plugin.json` makes
+   `.github/workflows/chatgpt-package.yml` build the ChatGPT ZIP.
 5. Obtain explicit approval for production enablement and each submission.
 
 ## Decisions worth reviewing

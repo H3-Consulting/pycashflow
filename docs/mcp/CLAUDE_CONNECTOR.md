@@ -70,10 +70,12 @@ Portal: **claude.ai/directory/manage → Submit new → MCP connector**. Have re
    (the portal groups them read-only vs write).
 3. **Listing:** name "PyCashFlow" (≤ 100), one-liner (≤ 200), description
    (≤ 2000), category Finance, documentation URL
-   (`https://pycashflow.com/user_guide` — add an "AI assistants" section),
-   privacy policy `https://www.pycashflow.com/privacy` (update it for AI
-   connections first), support contact, icon (`plugins/chatgpt/assets/logo.png`
-   can be reused).
+   `https://www.pycashflow.com/support#ai-assistants`, privacy policy
+   `https://www.pycashflow.com/privacy`, support contact
+   `support@pycashflow.com` (`https://www.pycashflow.com/support`), icon
+   (`plugins/chatgpt/assets/logo.png` can be reused). The support page and
+   the AI-connection sections of the privacy policy and terms come from
+   H3-Consulting/pycashflow-site#35; merge it first.
 4. **Use cases:** reads and writes data; users need a PyCashFlow account (and,
    on the hosted service, an active subscription).
 5. **Company:** H3 Consulting Partners.
