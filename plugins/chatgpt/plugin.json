@@ -40,7 +40,7 @@
       },
       "onboardingSkill": "./skills/get-started/SKILL.md",
       "review": {
-        "demo_recording_url": "REPLACE_WITH_DEMO_RECORDING_URL",
+        "demo_recording_url": "https://www.pycashflow.com/demo",
         "commerce": false,
         "commerce_description": "PyCashFlow does not sell, purchase or transfer anything through ChatGPT.",
         "positive_test_cases": [

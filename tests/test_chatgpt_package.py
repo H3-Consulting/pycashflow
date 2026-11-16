@@ -34,6 +34,12 @@ def _edit_plugin(builder, change):
     path.write_text(json.dumps(plugin, indent=2), encoding="utf-8")
 
 
+def _add_placeholder(builder):
+    def change(plugin):
+        plugin["extensions"]["com.openai"]["review"]["demo_recording_url"] = "REPLACE_WITH_DEMO_RECORDING_URL"
+    _edit_plugin(builder, change)
+
+
 def _fill_placeholders(builder):
     def change(plugin):
         plugin["extensions"]["com.openai"]["review"]["demo_recording_url"] = "https://example.com/demo.mp4"
@@ -41,12 +47,14 @@ def _fill_placeholders(builder):
 
 
 def test_placeholders_exit_3_and_build_nothing(builder, capsys):
+    _add_placeholder(builder)
     assert builder.main(["--offline"]) == builder.EXIT_PLACEHOLDERS == 3
     assert "unresolved placeholders" in capsys.readouterr().err
     assert not (builder.HERE / "dist").exists()
 
 
 def test_allow_placeholders_builds_a_dry_run(builder):
+    _add_placeholder(builder)
     assert builder.main(["--offline", "--allow-placeholders"]) == 0
     assert list((builder.HERE / "dist").glob("*.zip"))
 
@@ -72,6 +80,8 @@ def test_complete_package_builds_reproducible_zip(builder, capsys):
 
 
 def test_invalid_package_exits_1_even_with_placeholders(builder, capsys):
+    _add_placeholder(builder)
+
     def change(plugin):
         plugin["extensions"]["com.openai"]["interface"]["supportURL"] = "http://example.com/support"
     _edit_plugin(builder, change)
@@ -87,3 +97,14 @@ def test_listing_urls_point_at_public_pages():
     assert interface["supportURL"] == "https://www.pycashflow.com/support"
     assert interface["privacyPolicyURL"] == "https://www.pycashflow.com/privacy"
     assert interface["termsOfServiceURL"] == "https://www.pycashflow.com/terms"
+    review = plugin["extensions"]["com.openai"]["review"]
+    assert review["demo_recording_url"] == "https://www.pycashflow.com/demo"
+
+
+def test_committed_package_is_ready_to_build(builder):
+    # No placeholders left: the merge workflow builds and uploads the ZIP.
+    assert builder.find_placeholders(
+        json.loads((builder.HERE / "plugin.json").read_text()),
+        json.loads((builder.HERE / "mcp.json").read_text()),
+    ) == []
+    assert builder.main(["--offline"]) == 0
