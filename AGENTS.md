@@ -48,8 +48,13 @@ pycashflow/
 │   ├── data/                  # SQLite database file (runtime)
 │   ├── static/                # CSS, icons, PWA assets
 │   └── templates/             # Jinja2 HTML templates
+├── app/services/              # Shared validation, projections, records (REST + MCP)
+├── app/oauth/                 # OAuth 2.1 authorization server for MCP clients
+├── app/mcp/                   # MCP server and tools (served via app/asgi.py)
+├── plugins/chatgpt/           # ChatGPT plugin submission package sources
+├── docs/mcp/                  # MCP design, security, operations, testing docs
 ├── migrations/
-│   └── versions/              # 9 Alembic migration files
+│   └── versions/              # Alembic migration files
 ├── tests/
 │   ├── conftest.py            # Pytest fixtures (in-memory SQLite)
 │   ├── _helpers.py            # Test utilities
@@ -149,12 +154,18 @@ seeded admin.
   and PostgreSQL, plus a Docker build and `.github/scripts/docker-smoke-test.sh`
   (boots the image, logs in, loads the dashboard) against SQLite and against
   PostgreSQL via a plain `postgresql://` URL (`SMOKE_DB=postgres`).
-- `.github/workflows/release.yml` runs when a PR is merged: bumps the version
+- `.github/workflows/release.yml` runs when a PR is merged (except PRs that
+  only change `ios-app/**` or `plugins/chatgpt/**`): bumps the version
   from the latest `vX.Y.Z` tag (patch by default; `release:minor` /
   `release:major` labels bump more, `release:skip` publishes nothing), runs the
   tests on SQLite and PostgreSQL, builds and smoke-tests the image on both, pushes `whahn1983/pycashflow:<version>`
   and `:latest`, then creates the `v<version>` tag and GitHub release.
   Requires the `DOCKERHUB_USERNAME` and `DOCKERHUB_TOKEN` repository secrets.
+- `.github/workflows/chatgpt-package.yml` runs on pushes to `master` that
+  change `plugins/chatgpt/**` (and on demand): validates the ChatGPT plugin
+  package and uploads `pycashflow-chatgpt-<version>.zip` as a run artifact.
+  While `REPLACE_*` review placeholders remain it only warns
+  (`build_package.py` exit status 3). It never submits anything.
 
 ---
 
@@ -338,6 +349,35 @@ their own credentials.
     endpoint inventory in `API_CONVENTIONS.md` when adding routes.
 
 ---
+
+## MCP Integration (ChatGPT / Claude)
+
+Docs: `docs/mcp/` (start with `docs/mcp/README.md`). Off unless `MCP_ENABLED=true`.
+
+- `app/services/` — shared tenant rule, validators, `run_projection()` (the only
+  place external callers run `update_cash(..., commit=True)`), ownership-scoped
+  CRUD. REST data routes delegate to it; keep REST responses unchanged.
+- `app/oauth/` — Authlib OAuth 2.1 server (`/.well-known/*`, `/oauth/*`,
+  `/settings/connected-apps`). Tokens are hashed, prefixed (`pcf_at_`, `pcf_rt_`)
+  and stored in `oauth_*` tables, never in `user_tokens`.
+- `app/mcp/` — MCP SDK server; tools in `app/mcp/tools/`. `app/asgi.py`
+  routes `/mcp` to it and everything else to Flask; `entry.sh` uses gunicorn's
+  `asgi` worker only when MCP is enabled.
+
+Rules:
+
+1. Tools must take identity only from the request principal
+   (`principal.effective_user_id`); never add user/owner/account arguments.
+2. Every tool goes through `ToolRunner.run()` with explicit scopes; writes pass
+   `write=True` (guest refusal, idempotency, audit). Add new tools to the scope
+   matrix in `tests/mcp_integration/test_mcp_tools.py`.
+3. Do not mark a tool `readOnlyHint=true` if it calls `run_projection()`
+   (projection maintenance commits). Keep descriptions factual.
+4. Never return tokens, secrets or trace ids in tool results; never log
+   `pcf_*` credentials.
+5. Any new table with a `user_id` FK must be added to
+   `main._delete_user_owned_rows`.
+6. Run tests with MCP on (default) and `MCP_ENABLED=false`.
 
 ## iOS App (SwiftUI) Notes
 

@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 520px; margin: 4rem auto;">
+    <div class="metric-card" style="padding: 2rem;">
+        <h2 style="color: var(--text-primary); font-size: 1.35rem;">
+            <i class="fa-solid fa-circle-exclamation" style="color: var(--danger);"></i> Unable to connect
+        </h2>
+        <p style="color: var(--text-secondary); margin-bottom: 1.25rem;">{{ message }}</p>
+        <a href="{{ url_for('main.index') }}" class="btn-modern btn-primary-modern" style="text-decoration: none;">Back to PyCashFlow</a>
+    </div>
+</div>
+{% endblock %}

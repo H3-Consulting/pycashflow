@@ -187,6 +187,11 @@ def create_app():
         os.environ.get('CSP_REPORT_ONLY', 'true').lower() == 'true'
     )
 
+    # MCP integration (ChatGPT / Claude connectors). Disabled by default; when
+    # disabled no OAuth or MCP route is registered and nothing else changes.
+    from .oauth.config import read_env_config as _read_mcp_env_config
+    app.config.update(_read_mcp_env_config())
+
     db.init_app(app)
     migrate.init_app(app, db)
     limiter.init_app(app)
@@ -253,6 +258,18 @@ def create_app():
     from .api import api as api_blueprint
     app.register_blueprint(api_blueprint, url_prefix="/api/v1")
     csrf.exempt(api_blueprint)
+
+    # OAuth 2.1 authorization server for MCP clients (only when enabled). A
+    # misconfiguration disables MCP and is logged, so the web app and iOS API
+    # keep working instead of failing to start.
+    if app.config.get('MCP_ENABLED'):
+        from .oauth import init_oauth
+        from .oauth.config import OAuthConfigError
+        try:
+            init_oauth(app)
+        except OAuthConfigError as exc:
+            logger.error("MCP disabled: %s", exc)
+            app.config['MCP_ENABLED'] = False
 
     # Don't use db.create_all() - use flask db upgrade instead
     # with app.app_context():

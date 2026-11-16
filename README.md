@@ -99,6 +99,14 @@ PyCashFlow is a powerful, multi-user web application designed to help individual
 - **Guest-Aware**: Automatically resolves guest users to their account owner's data
 - **Rate-Limited**: Login endpoint rate-limited to prevent brute-force attacks
 
+### AI Assistants (ChatGPT & Claude) via MCP
+- **Optional MCP server** at `/mcp` (disabled by default, `MCP_ENABLED=true` to enable)
+- **Connect with your PyCashFlow login** through a built-in OAuth 2.1 server (password, TOTP or passkey) — no extra accounts
+- **Ask about your outlook** ("will I run short this month?") and manage schedules, scenarios, holds and skips with previews before any change
+- **Least privilege**: you choose read/write permissions per app and can disconnect any app from *Settings → Connected apps*
+- No money movement, billing, bank-connection or admin tools
+- See [docs/mcp/README.md](docs/mcp/README.md) for setup, security and deployment
+
 ### Progressive Web App (PWA)
 - **Installable**: Add to home screen on mobile and desktop devices
 - **Offline Support**: Service worker caches pages and static assets so previously visited views remain accessible without a network connection

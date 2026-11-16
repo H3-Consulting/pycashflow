@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 560px; margin: 3rem auto;">
+    <div style="text-align: center; margin-bottom: 1.5rem;">
+        <h1 style="color: var(--accent); font-size: 2rem; margin-bottom: 0.25rem;">
+            <i class="fa-solid fa-chart-line"></i> PyCashFlow
+        </h1>
+        <p style="color: var(--text-secondary); margin: 0;">Connect an application to your account</p>
+    </div>
+
+    <div class="metric-card" style="padding: 2rem;">
+        {% with messages = get_flashed_messages() %}
+        {% for message in messages %}
+        <div class="alert" role="alert" style="background-color: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger); color: var(--text-primary); border-radius: var(--radius-md); margin-bottom: 1rem;">
+            <i class="fa-solid fa-circle-exclamation"></i> {{ message }}
+        </div>
+        {% endfor %}
+        {% endwith %}
+
+        <h2 style="color: var(--text-primary); font-size: 1.35rem; margin-bottom: 0.75rem;">
+            <strong>{{ client_name }}</strong> wants to access your PyCashFlow account
+        </h2>
+
+        <div style="border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.85rem 1rem; margin-bottom: 1rem; color: var(--text-secondary); font-size: 0.9rem;">
+            {% if identity.verified_host %}
+            <div><i class="fa-solid fa-circle-check" style="color: var(--success);"></i>
+                Application identity published by <strong style="color: var(--text-primary);">{{ identity.verified_host }}</strong></div>
+            {% else %}
+            <div><i class="fa-solid fa-triangle-exclamation" style="color: #f59e0b;"></i>
+                Self-registered application. Its name was provided by the application and is not verified.</div>
+            {% endif %}
+            <div style="margin-top: 0.4rem;"><i class="fa-solid fa-arrow-right-from-bracket"></i>
+                After you decide, you will be sent to <strong style="color: var(--text-primary);">{{ redirect_host }}</strong></div>
+            <div style="margin-top: 0.4rem;"><i class="fa-solid fa-user"></i>
+                Signed in as <strong style="color: var(--text-primary);">{{ account_email }}</strong>
+                (<a href="{{ url_for('auth.logout') }}">not you?</a>)</div>
+        </div>
+
+        {% if loopback %}
+        <div class="alert" role="alert" style="background-color: rgba(245, 158, 11, 0.12); border: 1px solid #f59e0b; color: var(--text-primary); border-radius: var(--radius-md); margin-bottom: 1rem; font-size: 0.9rem;">
+            <i class="fa-solid fa-laptop"></i>
+            This application returns to a program on your own computer ({{ redirect_host }}). Only continue if you just started this connection yourself from a tool you trust.
+        </div>
+        {% endif %}
+
+        <form method="POST" action="{{ request.full_path }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <input type="hidden" name="consent_ticket" value="{{ ticket }}">
+
+            <p style="color: var(--text-primary); margin-bottom: 0.5rem; font-weight: 600;">Allow this application to:</p>
+            <div style="display: grid; gap: 0.5rem; margin-bottom: 1rem;">
+                {% for choice in choices %}
+                <label style="display: flex; gap: 0.75rem; align-items: flex-start; border: 1px solid var(--border); border-radius: var(--radius-md); padding: 0.65rem 0.85rem; cursor: pointer;">
+                    <input type="checkbox" name="grant_scope" value="{{ choice.scope }}" checked style="margin-top: 0.3rem;">
+                    <span>
+                        <strong style="color: var(--text-primary);">{{ choice.title }}</strong>
+                        {% if choice.write %}<span style="color: #f59e0b; font-size: 0.75rem; margin-left: 0.35rem;">CAN CHANGE YOUR DATA</span>{% endif %}<br>
+                        <small style="color: var(--text-secondary);">{{ choice.detail }}</small>
+                    </span>
+                </label>
+                {% endfor %}
+            </div>
+
+            {% if withheld %}
+            <p style="color: var(--text-secondary); font-size: 0.85rem;">
+                <i class="fa-solid fa-lock"></i>
+                Your account is view-only, so these requested permissions will not be granted: {{ withheld|join(', ') }}.
+            </p>
+            {% endif %}
+
+            <p style="color: var(--text-secondary); font-size: 0.85rem;">
+                The application never sees your password. It cannot move money, change billing or bank connections, or manage users.
+                You can disconnect it at any time from <strong>Settings &rarr; Connected apps</strong>.
+            </p>
+
+            <div style="display: flex; gap: 0.75rem; margin-top: 1.25rem;">
+                <button type="submit" name="decision" value="deny" class="btn-modern" style="flex: 1; background: transparent; border: 1px solid var(--border); color: var(--text-primary);">
+                    Deny
+                </button>
+                <button type="submit" name="decision" value="approve" class="btn-modern btn-primary-modern" style="flex: 1;">
+                    <i class="fa-solid fa-check"></i> Allow
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}

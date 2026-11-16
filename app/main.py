@@ -6,7 +6,8 @@ from flask import Blueprint, render_template
 from .models import (
     Schedule, Scenario, Balance, User, Settings, TextSettings, Email, Hold, Skip,
     GlobalEmailSettings, AISettings, PasskeyCredential, UserToken, PasswordSetupToken,
-    Subscription, PlaidConnection,
+    Subscription, PlaidConnection, OAuthToken, OAuthAuthorizationCode, OAuthGrant,
+    OAuthAuditEvent, McpIdempotencyKey,
 )
 from app import db, limiter
 from datetime import datetime, timezone
@@ -744,6 +745,9 @@ def changepw():
                 flash('New password must be at least 8 characters')
                 return redirect(url_for('main.settings'))
             my_user.password = generate_password_hash(password, method='scrypt')
+            # A password change disconnects every OAuth (ChatGPT/Claude) grant.
+            from .oauth.tokens import revoke_all_user_grants
+            revoke_all_user_grants(my_user.id, "password_changed", commit=False)
 
         db.session.commit()
         flash('Account settings updated successfully')
@@ -982,6 +986,12 @@ def _delete_user_owned_rows(user_ids):
         return
 
     for model in (
+        # OAuth/MCP rows first: tokens and codes reference grants.
+        OAuthToken,
+        OAuthAuthorizationCode,
+        OAuthGrant,
+        OAuthAuditEvent,
+        McpIdempotencyKey,
         PasswordSetupToken,
         UserToken,
         PasskeyCredential,
@@ -1378,7 +1388,10 @@ def remove_guest(guest_id):
     guest = User.query.filter_by(id=int(guest_id), account_owner_id=current_user.id).first()
 
     if guest:
-        db.session.query(PasswordSetupToken).filter_by(user_id=guest.id).delete()
+        # Remove every row that references the guest (API tokens, passkeys,
+        # OAuth grants/tokens, ...). Leaving OAuth tokens behind would let them
+        # outlive the account; on PostgreSQL the FKs would block the delete.
+        _delete_user_owned_rows([guest.id])
         db.session.delete(guest)
         db.session.commit()
         flash('Guest user removed successfully')

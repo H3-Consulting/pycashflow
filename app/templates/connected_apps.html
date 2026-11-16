@@ -1,0 +1,68 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div style="max-width: 760px; margin: 2rem auto;">
+    {% with messages = get_flashed_messages(with_categories=True) %}
+    {% for category, message in messages %}
+    <div class="alert" role="alert" style="background-color: {{ 'rgba(16, 185, 129, 0.1)' if category == 'success' else 'rgba(239, 68, 68, 0.1)' }}; border: 1px solid {{ 'var(--success)' if category == 'success' else 'var(--danger)' }}; color: var(--text-primary); border-radius: var(--radius-md); margin-bottom: 1rem;">
+        {{ message }}
+    </div>
+    {% endfor %}
+    {% endwith %}
+
+    <div class="metric-card" style="padding: 2rem; margin-bottom: 1rem;">
+        <h2 style="color: var(--text-primary);"><i class="fa-solid fa-plug"></i> Connected apps</h2>
+        <p style="color: var(--text-secondary);">
+            AI assistants such as ChatGPT and Claude that you have allowed to use your PyCashFlow data.
+            Disconnecting an app immediately revokes its access; other apps and the iOS app are not affected.
+        </p>
+        {% if grants %}
+        <ul style="list-style: none; padding: 0; margin: 0; display: grid; gap: 0.75rem;">
+            {% for grant in grants %}
+            <li style="border: 1px solid var(--border); border-radius: var(--radius-md); padding: 1rem; display: flex; justify-content: space-between; align-items: flex-start; gap: 1rem;">
+                <div>
+                    <strong style="color: var(--text-primary);">{{ grant.client_name }}</strong>
+                    {% if grant.verified_host %}<small style="color: var(--text-secondary);"> &middot; {{ grant.verified_host }}</small>{% else %}<small style="color: var(--text-secondary);"> &middot; self-registered</small>{% endif %}<br>
+                    <small style="color: var(--text-secondary);">{{ grant.scopes|join(' · ') }}</small><br>
+                    <small style="color: var(--text-secondary);">
+                        Connected {{ grant.created_at.strftime('%Y-%m-%d %H:%M') }} UTC
+                        &middot; last used {{ grant.last_used_at.strftime('%Y-%m-%d %H:%M') ~ ' UTC' if grant.last_used_at else 'never' }}
+                        {% if grant.expires_at %}&middot; expires {{ grant.expires_at.strftime('%Y-%m-%d') }}{% endif %}
+                    </small>
+                </div>
+                <form method="POST" action="{{ url_for('oauth.revoke_connected_app', grant_id=grant.id) }}" onsubmit="return confirm('Disconnect this app? It will lose access immediately.')">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <button class="btn-modern" style="background: #ef4444; color: white; border: none;" type="submit">
+                        <i class="fa-solid fa-link-slash"></i> Disconnect
+                    </button>
+                </form>
+            </li>
+            {% endfor %}
+        </ul>
+        {% else %}
+        <p style="color: var(--text-secondary); margin: 0;">No apps are connected.</p>
+        {% endif %}
+    </div>
+
+    <div class="metric-card" style="padding: 2rem;">
+        <h3 style="color: var(--text-primary);">Recent activity</h3>
+        {% if events %}
+        <table style="width: 100%; font-size: 0.85rem; color: var(--text-secondary);">
+            <thead><tr><th>Time (UTC)</th><th>App</th><th>Action</th><th>Result</th></tr></thead>
+            <tbody>
+            {% for event in events %}
+            <tr>
+                <td>{{ event.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>{{ client_names.get(event.client_id, '—') }}</td>
+                <td>{{ event.action }}{% if event.resource_type %} ({{ event.resource_type }}{% if event.resource_id %} #{{ event.resource_id }}{% endif %}){% endif %}</td>
+                <td>{{ event.outcome }}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% else %}
+        <p style="color: var(--text-secondary); margin: 0;">No activity yet.</p>
+        {% endif %}
+    </div>
+</div>
+{% endblock %}

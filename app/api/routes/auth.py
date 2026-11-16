@@ -17,6 +17,7 @@ from app.auth import _DUMMY_HASH, _passkey_enabled
 from app.password_setup import consume_password_setup_token
 from app.totp_utils import decrypt_totp_secret, verify_totp, verify_and_consume_backup_code
 from app.subscription import enforce_user_access
+from app.oauth.tokens import revoke_all_user_grants
 
 from app.api import api
 from app.api.auth_utils import (
@@ -270,6 +271,7 @@ def api_change_password():
 
     user.password = generate_password_hash(body["new_password"], method="scrypt")
     UserToken.query.filter_by(user_id=user.id).delete(synchronize_session=False)
+    revoke_all_user_grants(user.id, "password_changed", commit=False)
     db.session.commit()
     return api_ok({"message": "Password updated"})
 
@@ -310,6 +312,7 @@ def api_complete_password_setup():
 
     user.password = generate_password_hash(new_password, method="scrypt")
     user.is_active = True
+    revoke_all_user_grants(user.id, "password_reset", commit=False)
     db.session.commit()
     return api_ok({"message": "Password setup complete"})
 

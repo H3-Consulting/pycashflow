@@ -396,6 +396,9 @@ def set_password(token: str):
 
     user.password = generate_password_hash(password, method="scrypt")
     user.is_active = True
+    # A password reset disconnects every OAuth (ChatGPT/Claude) grant.
+    from .oauth.tokens import revoke_all_user_grants
+    revoke_all_user_grants(user.id, "password_reset", commit=False)
     db.session.commit()
     flash(
         "Password successfully set! You can sign in here or on the iOS app.",
