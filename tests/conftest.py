@@ -30,6 +30,12 @@ os.environ.setdefault("PASSKEY_RP_ID", "localhost")
 os.environ.setdefault("PASSKEY_RP_NAME", "PyCashFlow Test")
 os.environ.setdefault("PASSKEY_ORIGIN", "http://localhost")
 os.environ.setdefault("PAYMENTS_ENABLED", "false")
+# The MCP integration is enabled for the shared test app so the whole suite
+# also proves it does not interfere with existing routes. Run with
+# MCP_ENABLED=false to exercise the default (disabled) configuration; MCP
+# tests then skip themselves.
+os.environ.setdefault("MCP_ENABLED", "true")
+os.environ.setdefault("MCP_PUBLIC_BASE_URL", "http://localhost")
 
 # ── Capture real app references BEFORE stubs are set up ──────────────────────
 # conftest.py is loaded before test_*.py files, so all imports here use the
@@ -58,6 +64,10 @@ from app.password_setup import (  # noqa: E402
     create_password_setup_token as _create_password_setup_token,
 )
 from app.api.routes import billing as _billing_routes  # noqa: E402
+# Shared services and the OAuth/MCP packages are imported here so their
+# module-level references bind to the real app/models before any stubs.
+from app.services import projections as _svc_projections, records as _svc_records  # noqa: E402,F401
+from app.oauth import tokens as _oauth_tokens, server as _oauth_server  # noqa: E402,F401
 from app import main as _main_module, auth as _auth_module  # noqa: E402
 import _helpers  # noqa: F401  – pre-load real cashflow refs before any test-module stubs
 from werkzeug.security import generate_password_hash                # noqa: E402
@@ -68,6 +78,9 @@ import uuid  # noqa: E402
 # Calling create_app() here ensures internal blueprint/model imports happen
 # with the real modules, so route handlers work correctly in route tests.
 _test_app = _create_app()
+if _test_app.config.get("MCP_ENABLED"):
+    from app import asgi as _asgi  # noqa: E402,F401
+    from app.mcp import server as _mcp_server  # noqa: E402,F401
 # Flask-Limiter reads RATELIMIT_ENABLED during init_app() (already run inside
 # create_app), so updating config afterwards is not enough; disable the live
 # singleton directly so rate limits don't interfere with the test suite.
