@@ -21,3 +21,10 @@ Flask-WTF
 psycopg2-binary
 plaid-python
 dkimpy
+# MCP integration (ChatGPT / Claude connectors). Pinned because these sit on an
+# external, authenticated access path: Authlib provides the OAuth 2.1
+# authorization server, mcp is the official MCP Python SDK (Streamable HTTP),
+# and a2wsgi runs the Flask app inside the ASGI server when MCP is enabled.
+Authlib==1.9.6
+mcp==2.3.0
+a2wsgi==1.10.10

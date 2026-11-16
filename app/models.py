@@ -373,3 +373,154 @@ class Subscription(db.Model):
             name='uq_subscription_external_source_id',
         ),
     )
+
+
+# ── OAuth 2.1 authorization server / MCP integration ────────────────────────
+#
+# These tables back the OAuth authorization server used by MCP clients
+# (ChatGPT, Claude). They are deliberately separate from ``user_tokens`` so
+# OAuth credentials can never be confused with iOS/REST bearer tokens: each
+# OAuth token is bound to a client, a grant (one user approval), a resource
+# (the MCP endpoint) and an explicit scope set. Only SHA-256 hashes of codes,
+# tokens and client secrets are stored.
+
+
+def _utcnow_naive():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+class OAuthClient(db.Model):
+    """A registered OAuth client (Dynamic Client Registration or CIMD cache)."""
+
+    __tablename__ = 'oauth_clients'
+
+    id = db.Column(db.Integer, primary_key=True)
+    # Random id for DCR clients; the HTTPS metadata URL for CIMD clients.
+    client_id = db.Column(db.String(512), nullable=False, unique=True, index=True)
+    # 'dcr' or 'cimd'
+    registration_type = db.Column(db.String(10), nullable=False)
+    client_secret_hash = db.Column(db.String(64), nullable=True)
+    client_name = db.Column(db.String(200), nullable=True)
+    client_uri = db.Column(db.String(512), nullable=True)
+    redirect_uris = db.Column(db.Text, nullable=False)  # JSON array
+    grant_types = db.Column(db.Text, nullable=False)  # JSON array
+    response_types = db.Column(db.Text, nullable=False)  # JSON array
+    scope = db.Column(db.String(500), nullable=True)
+    token_endpoint_auth_method = db.Column(db.String(40), nullable=False, default='none')
+    is_active = db.Column(db.Boolean, nullable=False, default=True, server_default=db.true())
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive)
+    updated_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive, onupdate=_utcnow_naive)
+    # CIMD cache bookkeeping
+    metadata_fetched_at = db.Column(db.DateTime, nullable=True)
+    metadata_expires_at = db.Column(db.DateTime, nullable=True)
+
+
+class OAuthAuthorizationCode(db.Model):
+    """Short-lived, single-use authorization code (PKCE-bound)."""
+
+    __tablename__ = 'oauth_authorization_codes'
+
+    id = db.Column(db.Integer, primary_key=True)
+    code_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    client_id = db.Column(db.String(512), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    redirect_uri = db.Column(db.String(1024), nullable=False)
+    scope = db.Column(db.String(500), nullable=False)
+    resource = db.Column(db.String(512), nullable=False)
+    code_challenge = db.Column(db.String(128), nullable=False)
+    code_challenge_method = db.Column(db.String(10), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive)
+    expires_at = db.Column(db.DateTime, nullable=False)
+    # Set atomically when the code is redeemed; a second redemption is a
+    # replay and revokes the grant created by the first one.
+    used_at = db.Column(db.DateTime, nullable=True)
+    grant_id = db.Column(db.Integer, db.ForeignKey('oauth_grants.id'), nullable=True)
+
+
+class OAuthGrant(db.Model):
+    """One user approval of one client: a connected application.
+
+    All access/refresh tokens issued from the same authorization belong to
+    the grant, so revoking the grant (from the connected-apps page, by
+    refresh-token replay detection or by a password change) revokes the
+    whole token family without touching other clients or iOS sessions.
+    """
+
+    __tablename__ = 'oauth_grants'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    client_id = db.Column(db.String(512), nullable=False, index=True)
+    client_name = db.Column(db.String(200), nullable=True)
+    scope = db.Column(db.String(500), nullable=False)
+    resource = db.Column(db.String(512), nullable=False)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive)
+    last_used_at = db.Column(db.DateTime, nullable=True)
+    expires_at = db.Column(db.DateTime, nullable=True)
+    revoked_at = db.Column(db.DateTime, nullable=True)
+    revoked_reason = db.Column(db.String(40), nullable=True)
+
+
+class OAuthToken(db.Model):
+    """An access token and (optionally) its paired refresh token."""
+
+    __tablename__ = 'oauth_tokens'
+
+    id = db.Column(db.Integer, primary_key=True)
+    grant_id = db.Column(db.Integer, db.ForeignKey('oauth_grants.id'), nullable=False, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    client_id = db.Column(db.String(512), nullable=False)
+    scope = db.Column(db.String(500), nullable=False)
+    resource = db.Column(db.String(512), nullable=False)
+    access_token_hash = db.Column(db.String(64), nullable=False, unique=True, index=True)
+    refresh_token_hash = db.Column(db.String(64), nullable=True, unique=True, index=True)
+    issued_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive)
+    access_expires_at = db.Column(db.DateTime, nullable=False)
+    refresh_expires_at = db.Column(db.DateTime, nullable=True)
+    access_revoked_at = db.Column(db.DateTime, nullable=True)
+    refresh_revoked_at = db.Column(db.DateTime, nullable=True)
+    # 'rotated' (normal refresh), 'revoked', 'replay', 'grant_revoked'
+    refresh_revoked_reason = db.Column(db.String(40), nullable=True)
+
+
+class OAuthAuditEvent(db.Model):
+    """Audit trail of OAuth grant lifecycle events and MCP mutations.
+
+    Stores identifiers and outcomes only — never tokens, secrets, names or
+    amounts — to keep financial data out of the audit store.
+    """
+
+    __tablename__ = 'oauth_audit_events'
+
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive, index=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=True, index=True)
+    client_id = db.Column(db.String(512), nullable=True)
+    grant_id = db.Column(db.Integer, nullable=True)
+    action = db.Column(db.String(64), nullable=False)
+    resource_type = db.Column(db.String(32), nullable=True)
+    resource_id = db.Column(db.String(64), nullable=True)
+    outcome = db.Column(db.String(16), nullable=False)
+    error_code = db.Column(db.String(40), nullable=True)
+    correlation_id = db.Column(db.String(64), nullable=True)
+
+
+class McpIdempotencyKey(db.Model):
+    """Replay protection for MCP write tools keyed by a client-chosen key."""
+
+    __tablename__ = 'mcp_idempotency_keys'
+
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('user.id'), nullable=False, index=True)
+    client_id = db.Column(db.String(512), nullable=False)
+    idempotency_key = db.Column(db.String(128), nullable=False)
+    tool_name = db.Column(db.String(64), nullable=False)
+    request_hash = db.Column(db.String(64), nullable=False)
+    response_json = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, nullable=False, default=_utcnow_naive)
+
+    __table_args__ = (
+        db.UniqueConstraint(
+            'user_id', 'client_id', 'idempotency_key', name='uq_mcp_idempotency_scope'
+        ),
+    )

@@ -6,7 +6,8 @@ from flask import Blueprint, render_template
 from .models import (
     Schedule, Scenario, Balance, User, Settings, TextSettings, Email, Hold, Skip,
     GlobalEmailSettings, AISettings, PasskeyCredential, UserToken, PasswordSetupToken,
-    Subscription, PlaidConnection,
+    Subscription, PlaidConnection, OAuthToken, OAuthAuthorizationCode, OAuthGrant,
+    OAuthAuditEvent, McpIdempotencyKey,
 )
 from app import db, limiter
 from datetime import datetime, timezone
@@ -744,6 +745,9 @@ def changepw():
                 flash('New password must be at least 8 characters')
                 return redirect(url_for('main.settings'))
             my_user.password = generate_password_hash(password, method='scrypt')
+            # A password change disconnects every OAuth (ChatGPT/Claude) grant.
+            from .oauth.tokens import revoke_all_user_grants
+            revoke_all_user_grants(my_user.id, "password_changed", commit=False)
 
         db.session.commit()
         flash('Account settings updated successfully')
@@ -982,6 +986,12 @@ def _delete_user_owned_rows(user_ids):
         return
 
     for model in (
+        # OAuth/MCP rows first: tokens and codes reference grants.
+        OAuthToken,
+        OAuthAuthorizationCode,
+        OAuthGrant,
+        OAuthAuditEvent,
+        McpIdempotencyKey,
         PasswordSetupToken,
         UserToken,
         PasskeyCredential,

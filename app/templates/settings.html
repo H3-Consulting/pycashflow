@@ -174,6 +174,24 @@
         {% endif %}
     </div>
 
+    {% if config.MCP_ENABLED %}
+    <!-- Connected Apps Card - shown only when the MCP integration is enabled -->
+    <div class="metric-card">
+        <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
+            <div style="width: 3rem; height: 3rem; background: linear-gradient(135deg, #0ea5e9, #38bdf8); border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; font-size: 1.5rem;">
+                <i class="fa-solid fa-plug"></i>
+            </div>
+            <div>
+                <h3 style="margin: 0; font-size: 1.1rem; color: var(--text-primary);">Connected apps</h3>
+                <p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary);">ChatGPT, Claude and other AI assistants</p>
+            </div>
+        </div>
+        <a href="{{ url_for('oauth.connected_apps') }}" class="btn-modern btn-primary-modern" style="width: 100%; text-decoration: none; display: flex; align-items: center; justify-content: center; gap: 0.4rem;">
+            <i class="fa-solid fa-plug"></i> Manage Connected Apps
+        </a>
+    </div>
+    {% endif %}
+
     <!-- Passkeys Card - Available to all users -->
     <div class="metric-card">
         <div style="display: flex; align-items: center; gap: 1rem; margin-bottom: 1rem;">
