@@ -10,6 +10,15 @@ from .scopes import ALL_SCOPES
 
 _LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1"}
 
+# Exact callback URLs published by ChatGPT and Claude (Nov 2026). "/*" admits
+# one extra path segment (ChatGPT callback-ID redirects).
+DEFAULT_REDIRECT_URIS = ",".join([
+    "https://chatgpt.com/connector_platform_oauth_redirect",
+    "https://chatgpt.com/connector/oauth/*",
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+])
+
 
 class OAuthConfigError(RuntimeError):
     """Raised when MCP is enabled with an unsafe or incomplete configuration."""
@@ -42,9 +51,7 @@ def read_env_config() -> dict:
         "MCP_ALLOWED_HOSTS": env.get("MCP_ALLOWED_HOSTS", ""),
         "MCP_ALLOWED_ORIGINS": env.get("MCP_ALLOWED_ORIGINS", ""),
         "MCP_RATE_LIMIT": env.get("MCP_RATE_LIMIT", "120/minute;2000/hour"),
-        "OAUTH_ALLOWED_REDIRECT_HOSTS": env.get(
-            "OAUTH_ALLOWED_REDIRECT_HOSTS", "chatgpt.com,claude.ai,claude.com"
-        ),
+        "OAUTH_ALLOWED_REDIRECT_URIS": env.get("OAUTH_ALLOWED_REDIRECT_URIS", DEFAULT_REDIRECT_URIS),
         "OAUTH_ALLOW_LOOPBACK_REDIRECTS": _bool(env.get("OAUTH_ALLOW_LOOPBACK_REDIRECTS"), True),
         "OAUTH_DCR_ENABLED": _bool(env.get("OAUTH_DCR_ENABLED"), True),
         "OAUTH_CIMD_ENABLED": _bool(env.get("OAUTH_CIMD_ENABLED"), True),
@@ -65,7 +72,7 @@ class OAuthConfig:
     resource: str
     resource_metadata_url: str
     scopes: tuple[str, ...]
-    allowed_redirect_hosts: frozenset[str]
+    allowed_redirect_uris: tuple[str, ...]
     allow_loopback_redirects: bool
     dcr_enabled: bool
     cimd_enabled: bool
@@ -126,7 +133,7 @@ def build_oauth_config(app_config) -> OAuthConfig:
         resource=f"{base_url}/mcp",
         resource_metadata_url=f"{base_url}/.well-known/oauth-protected-resource/mcp",
         scopes=ALL_SCOPES,
-        allowed_redirect_hosts=frozenset(h.lower() for h in _csv(app_config.get("OAUTH_ALLOWED_REDIRECT_HOSTS"))),
+        allowed_redirect_uris=tuple(_csv(app_config.get("OAUTH_ALLOWED_REDIRECT_URIS", DEFAULT_REDIRECT_URIS))),
         allow_loopback_redirects=bool(app_config.get("OAUTH_ALLOW_LOOPBACK_REDIRECTS", True)),
         dcr_enabled=bool(app_config.get("OAUTH_DCR_ENABLED", True)),
         cimd_enabled=bool(app_config.get("OAUTH_CIMD_ENABLED", True)),

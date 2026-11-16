@@ -26,6 +26,7 @@ import logging
 import re
 import socket
 import ssl
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
@@ -34,6 +35,9 @@ logger = logging.getLogger(__name__)
 
 MAX_DOCUMENT_BYTES = 32 * 1024
 FETCH_TIMEOUT_SECONDS = 5
+# Hard cap on the whole fetch (connect + TLS + headers + body), so a server
+# that drips bytes cannot hold a request thread beyond this.
+TOTAL_FETCH_SECONDS = 8
 MIN_CACHE_SECONDS = 300
 MAX_CACHE_SECONDS = 86400
 STALE_IF_ERROR = timedelta(days=7)
@@ -88,6 +92,25 @@ def _is_ip_literal(host: str) -> bool:
         return False
 
 
+# IPv6 ranges that embed or translate to IPv4 addresses (NAT64, deprecated
+# IPv4-compatible, 6to4, Teredo). ``is_global`` can be True for them even when
+# the embedded IPv4 address is private or link-local (e.g. cloud metadata).
+_EMBEDDING_NETWORKS = tuple(ipaddress.ip_network(n) for n in (
+    "64:ff9b::/96", "64:ff9b:1::/48", "::/96", "2002::/16", "2001::/32",
+))
+
+
+def _address_allowed(ip) -> bool:
+    if not ip.is_global or ip.is_multicast or ip.is_reserved:
+        return False
+    if ip.version == 6:
+        if ip.ipv4_mapped is not None:
+            return False
+        if any(ip in network for network in _EMBEDDING_NETWORKS):
+            return False
+    return True
+
+
 def resolve_public_ip(host: str) -> str:
     """Resolve *host*; refuse if any address is not globally routable."""
     try:
@@ -96,13 +119,23 @@ def resolve_public_ip(host: str) -> str:
         raise CimdError("client metadata host could not be resolved") from exc
     addresses = []
     for info in infos:
-        ip = ipaddress.ip_address(info[4][0])
-        if not ip.is_global or ip.is_multicast:
+        ip = ipaddress.ip_address(info[4][0].split("%", 1)[0])
+        if not _address_allowed(ip):
             raise CimdError("client metadata host resolves to a non-public address")
         addresses.append(str(ip))
     if not addresses:
         raise CimdError("client metadata host could not be resolved")
     return addresses[0]
+
+
+def _abort_connection(conn) -> None:
+    """Watchdog: unblock a fetch that exceeded TOTAL_FETCH_SECONDS."""
+    sock = getattr(conn, "sock", None)
+    if sock is not None:
+        try:
+            sock.shutdown(socket.SHUT_RDWR)
+        except OSError:
+            pass
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -132,6 +165,9 @@ def http_fetch(url: str, allowed_hosts) -> FetchedDocument:
     target = parts.path + (f"?{parts.query}" if parts.query else "")
     context = ssl.create_default_context()
     conn = _PinnedHTTPSConnection(host, ip, timeout=FETCH_TIMEOUT_SECONDS, context=context)
+    watchdog = threading.Timer(TOTAL_FETCH_SECONDS, _abort_connection, args=(conn,))
+    watchdog.daemon = True
+    watchdog.start()
     try:
         conn.request(
             "GET",
@@ -148,9 +184,10 @@ def http_fetch(url: str, allowed_hosts) -> FetchedDocument:
         if len(body) > MAX_DOCUMENT_BYTES:
             raise CimdError("client metadata document is too large")
         max_age = _parse_max_age(response.getheader("Cache-Control"))
-    except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
+    except (OSError, http.client.HTTPException, ssl.SSLError, ValueError) as exc:
         raise CimdError("client metadata could not be fetched") from exc
     finally:
+        watchdog.cancel()
         conn.close()
     try:
         document = json.loads(body.decode("utf-8"))

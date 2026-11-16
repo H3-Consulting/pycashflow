@@ -49,7 +49,9 @@ from .security import (
     normalize_resource,
     sha256_hex,
 )
-from .tokens import REFRESH_REUSE_GRACE, grant_is_live, revoke_grant, revoke_grant_by_id, utcnow
+from .tokens import (
+    REFRESH_REUSE_GRACE, collect_garbage, grant_is_live, revoke_grant, revoke_grant_by_id, utcnow,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -424,7 +426,11 @@ class PCFClientRegistrationEndpoint(ClientRegistrationEndpoint):
         if client_uri is not None and not (isinstance(client_uri, str) and client_uri.startswith("https://")):
             client_uri = None
         if OAuthClient.query.filter_by(registration_type="dcr").count() >= config.max_dcr_clients:
-            raise InvalidClientMetadataError("Client registration is temporarily unavailable")
+            # Under pressure, reclaim registrations that never completed an
+            # authorization within the last hour before refusing new ones.
+            collect_garbage(max_dcr_idle=timedelta(hours=1))
+            if OAuthClient.query.filter_by(registration_type="dcr").count() >= config.max_dcr_clients:
+                raise InvalidClientMetadataError("Client registration is temporarily unavailable")
         secret = client_info.get("client_secret")
         row = OAuthClient(
             client_id=client_info["client_id"],
@@ -458,7 +464,7 @@ class PCFIssuerParameter(IssuerParameter):
 class PyCashFlowAuthorizationServer(AuthorizationServer):
     def __init__(self, app, config):
         self.config = config
-        self.redirect_policy = RedirectPolicy(config.allowed_redirect_hosts, config.allow_loopback_redirects)
+        self.redirect_policy = RedirectPolicy(config.allowed_redirect_uris, config.allow_loopback_redirects)
         super().__init__(app, query_client=self._query_client, save_token=self._save_token)
         self.scopes_supported = list(config.scopes)
         self.register_token_generator("default", self._generate_token)

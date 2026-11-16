@@ -133,7 +133,9 @@ def register_client():
 def issue_token():
     if request.method == "OPTIONS":
         return _with_cors(current_app.response_class(status=204))
-    return _with_cors(_server().create_token_response())
+    response = _server().create_token_response()
+    _maybe_collect_garbage()  # throttled housekeeping; clients refresh hourly
+    return _with_cors(response)
 
 
 @oauth_bp.route("/oauth/revoke", methods=["POST", "OPTIONS"])

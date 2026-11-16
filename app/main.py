@@ -1388,7 +1388,10 @@ def remove_guest(guest_id):
     guest = User.query.filter_by(id=int(guest_id), account_owner_id=current_user.id).first()
 
     if guest:
-        db.session.query(PasswordSetupToken).filter_by(user_id=guest.id).delete()
+        # Remove every row that references the guest (API tokens, passkeys,
+        # OAuth grants/tokens, ...). Leaving OAuth tokens behind would let them
+        # outlive the account; on PostgreSQL the FKs would block the delete.
+        _delete_user_owned_rows([guest.id])
         db.session.delete(guest)
         db.session.commit()
         flash('Guest user removed successfully')

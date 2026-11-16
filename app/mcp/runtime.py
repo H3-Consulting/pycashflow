@@ -18,6 +18,8 @@ import hashlib
 import json
 import logging
 import re
+import threading
+from contextlib import nullcontext
 from typing import Callable
 
 import anyio
@@ -29,11 +31,28 @@ from app import db
 from app.models import McpIdempotencyKey
 from app.oauth import audit
 from app.oauth.tokens import Principal
-from app.services.errors import Conflict, Forbidden, ServiceError
+from app.services.errors import Conflict, ServiceError
 
 logger = logging.getLogger(__name__)
 
 IDEMPOTENCY_KEY_PATTERN = re.compile(r"^[A-Za-z0-9._:-]{8,128}$")
+
+_ACCOUNT_LOCKS: dict[int, threading.Lock] = {}
+_ACCOUNT_LOCKS_GUARD = threading.Lock()
+
+
+def account_write_lock(account_id: int) -> threading.Lock:
+    """Per-account lock serialising MCP writes inside one worker process.
+
+    PostgreSQL deployments additionally rely on row locks (FOR UPDATE); with
+    SQLite those are no-ops, so this closes check-then-insert races (e.g.
+    duplicate holds/skips) for the default single-worker container.
+    """
+    with _ACCOUNT_LOCKS_GUARD:
+        lock = _ACCOUNT_LOCKS.get(account_id)
+        if lock is None:
+            lock = _ACCOUNT_LOCKS[account_id] = threading.Lock()
+        return lock
 
 
 class AuthContextMissing(RuntimeError):
@@ -128,7 +147,8 @@ class ToolRunner:
             )
 
         def work():
-            with self.flask_app.app_context():
+            lock = account_write_lock(principal.effective_user_id) if write else nullcontext()
+            with lock, self.flask_app.app_context():
                 try:
                     if write and idempotency_key:
                         model, replayed = self._run_idempotent(
@@ -168,7 +188,8 @@ class ToolRunner:
                         )
                     return error_result(
                         "internal_error",
-                        "PyCashFlow could not complete this request. No partial change was saved by this tool.",
+                        "PyCashFlow could not complete this request. Re-read the affected records "
+                        "before retrying.",
                         correlation_id=correlation_id,
                     )
 
@@ -244,4 +265,4 @@ def _resource_id(model) -> str | None:
     return None
 
 
-__all__ = ["ToolRunner", "principal_from_context", "success", "error_result", "Forbidden"]
+__all__ = ["ToolRunner", "principal_from_context", "success", "error_result", "account_write_lock"]

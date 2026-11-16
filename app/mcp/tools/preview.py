@@ -21,10 +21,13 @@ ChangeType = Literal[
     "create_hold", "remove_hold", "create_skip", "remove_skip",
 ]
 
-_READ_SCOPE = {
-    "create_schedule": S.SCHEDULES_READ, "update_schedule": S.SCHEDULES_READ,
-    "delete_schedule": S.SCHEDULES_READ, "create_hold": S.HOLDS_READ, "remove_hold": S.HOLDS_READ,
-    "create_skip": S.SKIPS_READ, "remove_skip": S.SKIPS_READ,
+# Read scopes for the records a preview reveals (create_hold/create_skip also
+# return the referenced schedule).
+_READ_SCOPES = {
+    "create_schedule": [S.SCHEDULES_READ], "update_schedule": [S.SCHEDULES_READ],
+    "delete_schedule": [S.SCHEDULES_READ], "create_hold": [S.HOLDS_READ, S.SCHEDULES_READ],
+    "remove_hold": [S.HOLDS_READ], "create_skip": [S.SKIPS_READ, S.SCHEDULES_READ],
+    "remove_skip": [S.SKIPS_READ],
 }
 _WRITE_SCOPE = {
     "create_schedule": S.SCHEDULES_WRITE, "update_schedule": S.SCHEDULES_WRITE,
@@ -133,9 +136,9 @@ def register(mcp, runner) -> None:
     async def preview_change(
         ctx: Context,
         change_type: Annotated[ChangeType, Field(description="The kind of change to evaluate")],
-        schedule_id: Annotated[int | None, Field(default=None, ge=1)] = None,
-        hold_id: Annotated[int | None, Field(default=None, ge=1)] = None,
-        skip_id: Annotated[int | None, Field(default=None, ge=1)] = None,
+        schedule_id: Annotated[int | None, Field(default=None, ge=1, le=2_147_483_647)] = None,
+        hold_id: Annotated[int | None, Field(default=None, ge=1, le=2_147_483_647)] = None,
+        skip_id: Annotated[int | None, Field(default=None, ge=1, le=2_147_483_647)] = None,
         occurrence_date: Annotated[str | None, Field(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$")] = None,
         name: Annotated[str | None, Field(default=None, min_length=1, max_length=100)] = None,
         amount: Annotated[str | float | int | None, Field(default=None)] = None,
@@ -181,7 +184,7 @@ def register(mcp, runner) -> None:
                 maintenance_performed=MAINTENANCE_NOTE,
             )
 
-        scopes = [S.PROJECTIONS_READ, _READ_SCOPE[change_type]]
+        scopes = [S.PROJECTIONS_READ, *_READ_SCOPES[change_type]]
         return await runner.run(ctx, tool="preview_change", scopes=scopes, fn=body)
 
     mcp.add_tool(

@@ -189,8 +189,18 @@ def apply_item_changes(record, parsed: dict) -> None:
         apply_start_date(record, parsed["start_date"])
 
 
+def _reject_past_onetime(frequency, start: date | None) -> None:
+    """One-time items dated in the past are removed by projection maintenance,
+    so creating or moving one into the past would silently lose it."""
+    if frequency == "Onetime" and start is not None and start < date.today():
+        raise ValidationFailed(
+            {"start_date": "A one-time item must be dated today or later (past one-time items are removed)"}
+        )
+
+
 def create_item(kind: ItemKind, user_id: int, fields: dict):
     parsed = validate_new_item(fields)
+    _reject_past_onetime(parsed["frequency"], parsed["start_date"])
     existing = kind.model.query.filter_by(user_id=user_id, name=parsed["name"]).first()
     if existing is not None:
         raise Conflict(
@@ -221,6 +231,11 @@ def update_item(kind: ItemKind, user_id: int, item_id: int, changes: dict, *, ex
             db.session.rollback()
             raise Conflict(f"{kind.label} name already exists", details={"field": "name"})
     apply_item_changes(record, parsed)
+    try:
+        _reject_past_onetime(record.frequency, record.startdate)
+    except ValidationFailed:
+        db.session.rollback()
+        raise
     _commit_or_conflict(f"{kind.label} name already exists")
     return record
 
@@ -309,7 +324,8 @@ def get_skip(user_id: int, skip_id: int, *, for_update: bool = False) -> Skip:
     return skip
 
 
-def resolve_skip_occurrence(user_id: int, schedule_id: int, occurrence_date) -> tuple:
+def resolve_skip_occurrence(user_id: int, schedule_id: int, occurrence_date, *,
+                            for_update: bool = False) -> tuple:
     """Validate that *occurrence_date* is a real future occurrence of a schedule.
 
     Returns ``(schedule, occurrence_date)``. Never guesses: a missing or
@@ -317,7 +333,7 @@ def resolve_skip_occurrence(user_id: int, schedule_id: int, occurrence_date) -> 
     Must be called after the projection pipeline has run so the schedule's
     persisted next date is current.
     """
-    schedule = get_item(SCHEDULE, user_id, schedule_id)
+    schedule = get_item(SCHEDULE, user_id, schedule_id, for_update=for_update)
     upcoming = projections.schedule_occurrence_dates(schedule)
     options = [d.isoformat() for d in upcoming[:12]]
     if occurrence_date is None:
@@ -361,9 +377,12 @@ def build_skip(user_id: int, schedule, occurrence: date) -> Skip:
 
 
 def create_skip(user_id: int, schedule_id: int, occurrence_date) -> Skip:
-    schedule, occurrence = resolve_skip_occurrence(user_id, schedule_id, occurrence_date)
+    # Lock the schedule row (PostgreSQL) so concurrent skips of the same
+    # occurrence serialise and the duplicate check below is reliable.
+    schedule, occurrence = resolve_skip_occurrence(user_id, schedule_id, occurrence_date, for_update=True)
     duplicate = find_duplicate_skip(user_id, schedule, occurrence)
     if duplicate is not None:
+        db.session.rollback()
         raise Conflict(
             "That occurrence is already skipped",
             details={"existing_skip_id": duplicate.id},

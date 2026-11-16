@@ -9,7 +9,6 @@ from pydantic import Field
 
 from app.oauth import scopes as S
 from app.services import records
-from app.services.errors import ValidationFailed
 
 from ..schemas import ItemList, ItemOut, ItemWriteOut
 from .common import (
@@ -50,17 +49,8 @@ _FREQ_HELP = (
 
 
 def _reject_past_onetime(frequency, start: date) -> None:
-    if frequency == "Onetime" and start < date.today():
-        raise ValidationFailed(
-            {"start_date": "A one-time item must be dated today or later (past one-time items are removed)"}
-        )
-
-
-def _check_onetime_after_update(record) -> None:
-    if record.frequency == "Onetime" and record.startdate and record.startdate < date.today():
-        raise ValidationFailed(
-            {"start_date": "A one-time item must be dated today or later (past one-time items are removed)"}
-        )
+    """Shared with preview_change so previews apply the same rule as writes."""
+    records._reject_past_onetime(frequency, start)
 
 
 def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str, write_scope: str,
@@ -106,10 +96,7 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
                    "start_date": start_date}
 
         def body(principal, cid):
-            fields = dict(payload)
-            parsed = records.validate_new_item(fields)
-            _reject_past_onetime(parsed["frequency"], parsed["start_date"])
-            record = records.create_item(kind, principal.effective_user_id, fields)
+            record = records.create_item(kind, principal.effective_user_id, dict(payload))
             created = item_out(record)
             return ItemWriteOut(action="created", item=created, deleted=None,
                                 projection_after_change=projection_after_change(principal),
@@ -144,12 +131,6 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
         def body(principal, cid):
             record = records.update_item(kind, principal.effective_user_id, item_id, changes,
                                          expected_etag=expected_etag)
-            try:
-                _check_onetime_after_update(record)
-            except ValidationFailed:
-                from app import db
-                db.session.rollback()
-                raise
             return ItemWriteOut(action="updated", item=item_out(record), deleted=None,
                                 projection_after_change=projection_after_change(principal),
                                 correlation_id=cid)

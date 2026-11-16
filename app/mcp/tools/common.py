@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from datetime import date, timedelta
 from decimal import Decimal
 
@@ -137,6 +138,19 @@ def projection_after_change(principal, horizon_days: int = projections.DEFAULT_W
     """
     if not principal.has_scope(PROJECTIONS_READ):
         return None
+    try:
+        return _summarise_after_change(principal, horizon_days)
+    except Exception:
+        # The requested change is already committed; never report it as
+        # failed because the follow-up summary could not be computed.
+        from app import db
+
+        db.session.rollback()
+        logging.getLogger(__name__).exception("Post-change projection summary failed")
+        return None
+
+
+def _summarise_after_change(principal, horizon_days: int):
     result = projections.run_projection(principal.effective_user_id)
     today = date.today()
     series = projections.daily_balances(result.run, today, today + timedelta(days=horizon_days))

@@ -14,6 +14,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import ipaddress
+import re
 import secrets
 from urllib.parse import urlsplit, urlunsplit
 
@@ -88,12 +89,31 @@ def is_loopback_redirect(uri: str) -> bool:
         return False
 
 
-class RedirectPolicy:
-    """Which redirect URIs clients may register, and how requests match them."""
+_SEGMENT = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
 
-    def __init__(self, allowed_hosts, allow_loopback: bool):
-        self.allowed_hosts = frozenset(h.lower() for h in allowed_hosts)
+
+class RedirectPolicy:
+    """Which redirect URIs clients may register, and how requests match them.
+
+    Non-loopback redirect URIs must appear on an allowlist of exact callback
+    URLs. An entry ending in ``/*`` admits exactly one extra path segment of
+    ``[A-Za-z0-9_-]`` (ChatGPT's per-connector callbacks). Pinning full
+    callback paths, not just hosts, means an open redirect elsewhere on
+    chatgpt.com or claude.ai cannot be used to capture authorization codes.
+    """
+
+    def __init__(self, allowed_uris, allow_loopback: bool):
+        self.exact = frozenset(u for u in allowed_uris if not u.endswith("/*"))
+        self.prefixes = tuple(u[:-1] for u in allowed_uris if u.endswith("/*"))
         self.allow_loopback = allow_loopback
+
+    def _allowlisted(self, uri: str) -> bool:
+        if uri in self.exact:
+            return True
+        for prefix in self.prefixes:
+            if uri.startswith(prefix) and _SEGMENT.match(uri[len(prefix):]):
+                return True
+        return False
 
     def check_registration(self, uri) -> str | None:
         """Return ``None`` if *uri* may be registered, else a reason string."""
@@ -116,9 +136,8 @@ class RedirectPolicy:
             return None
         if parts.scheme != "https":
             return "redirect_uri must use https (or http on a loopback address)"
-        host = _hostname(parts)
-        if host not in self.allowed_hosts:
-            return f"redirect host {host!r} is not on this server's allowlist"
+        if not self._allowlisted(uri):
+            return "redirect_uri is not on this server's callback allowlist"
         return None
 
     @staticmethod
@@ -143,3 +162,52 @@ class RedirectPolicy:
             and reg.query == req.query
             and not req.fragment
         )
+
+
+# ── Log redaction ───────────────────────────────────────────────────────────
+
+import logging  # noqa: E402
+
+_SECRET_PATTERN = re.compile(r"pcf_(at|rt|ac|cs)_[A-Za-z0-9_\-]+")
+
+# Authlib loggers that format issued tokens or client credentials into DEBUG
+# messages (e.g. "Issue token {...} to <client>").
+_AUTHLIB_CREDENTIAL_LOGGERS = (
+    "authlib",
+    "authlib.oauth2.rfc6749.grants.authorization_code",
+    "authlib.oauth2.rfc6749.grants.refresh_token",
+    "authlib.oauth2.rfc6749.authorization_server",
+    "authlib.oauth2.rfc6749.authenticate_client",
+    "authlib.oauth2.rfc7009.revocation",
+    "authlib.oauth2.rfc7591.endpoint",
+)
+
+
+def redact_secrets(text: str) -> str:
+    return _SECRET_PATTERN.sub(lambda m: f"pcf_{m.group(1)}_[REDACTED]", text)
+
+
+class SecretRedactingFilter(logging.Filter):
+    """Rewrite log records so OAuth codes, tokens and secrets never reach logs."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        try:
+            message = record.getMessage()
+        except Exception:  # pragma: no cover - malformed record; drop args
+            message = str(record.msg)
+        if "pcf_" in message:
+            record.msg = redact_secrets(message)
+            record.args = None
+        return True
+
+
+def install_log_redaction() -> None:
+    """Attach the redaction filter and keep Authlib at INFO or above."""
+    redactor = SecretRedactingFilter()
+    for name in _AUTHLIB_CREDENTIAL_LOGGERS:
+        log = logging.getLogger(name)
+        if not any(isinstance(f, SecretRedactingFilter) for f in log.filters):
+            log.addFilter(redactor)
+    authlib_logger = logging.getLogger("authlib")
+    if authlib_logger.getEffectiveLevel() < logging.INFO:
+        authlib_logger.setLevel(logging.INFO)

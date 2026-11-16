@@ -37,6 +37,9 @@ class PathDispatcher:
         if kind == "lifespan":
             await self.mcp_app(scope, receive, send)
         elif kind == "http" and scope.get("path") in MCP_PATHS:
+            # Normalise "/mcp/" to "/mcp" instead of letting the SDK answer
+            # with a redirect built from the client-supplied Host header.
+            scope = dict(scope, path="/mcp", raw_path=b"/mcp")
             await self.mcp_app(scope, receive, send)
         elif kind == "http":
             await self.flask_asgi(scope, receive, send)

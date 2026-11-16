@@ -65,15 +65,18 @@ def register(mcp, runner) -> None:
                                 projection_after_change=projection_after_change(principal),
                                 correlation_id=cid)
 
-        return await runner.run(ctx, tool="create_hold", scopes=[S.HOLDS_WRITE], fn=body, write=True,
+        # schedules:read too: the result reveals the referenced schedule.
+        return await runner.run(ctx, tool="create_hold", scopes=[S.HOLDS_WRITE, S.SCHEDULES_READ], fn=body,
+                                write=True,
                                 resource_type="hold", idempotency_key=idempotency_key,
                                 idempotency_payload=payload)
 
     mcp.add_tool(create_hold, name="create_hold", title="Create hold",
                  description=(f"Create a hold from an existing schedule (schedule_id). {HOLD_SEMANTICS} "
                               "Refused if that schedule already has a hold. Confirm with the user first. "
-                              "Saving also runs projection maintenance. Requires holds:write."),
-                 annotations=mutating("Create hold", idempotent=False), meta=security_meta([S.HOLDS_WRITE]))
+                              "Saving also runs projection maintenance. Requires holds:write and schedules:read."),
+                 annotations=mutating("Create hold", idempotent=False),
+                 meta=security_meta([S.HOLDS_WRITE, S.SCHEDULES_READ]))
 
     async def remove_hold(ctx: Context, hold_id: IdParam,
                           idempotency_key: IdempotencyParam = None) -> Annotated[CallToolResult, HoldWriteOut]:
@@ -130,7 +133,9 @@ def register(mcp, runner) -> None:
                                 projection_after_change=projection_after_change(principal),
                                 correlation_id=cid)
 
-        return await runner.run(ctx, tool="create_skip", scopes=[S.SKIPS_WRITE], fn=body, write=True,
+        # Resolving occurrences runs the projection and reveals schedule dates.
+        return await runner.run(ctx, tool="create_skip",
+                                scopes=[S.SKIPS_WRITE, S.SCHEDULES_READ, S.PROJECTIONS_READ], fn=body, write=True,
                                 resource_type="skip", idempotency_key=idempotency_key,
                                 idempotency_payload=payload)
 
@@ -140,9 +145,9 @@ def register(mcp, runner) -> None:
                               "If occurrence_date is missing or does not match a real upcoming occurrence, nothing "
                               "is saved and a clarification_required error lists valid dates — ask the user which "
                               "one they mean; never guess. Already-skipped occurrences are refused. Also runs "
-                              "projection maintenance. Requires skips:write."),
+                              "projection maintenance. Requires skips:write, schedules:read and projections:read."),
                  annotations=mutating("Skip one occurrence", idempotent=False),
-                 meta=security_meta([S.SKIPS_WRITE]))
+                 meta=security_meta([S.SKIPS_WRITE, S.SCHEDULES_READ, S.PROJECTIONS_READ]))
 
     async def remove_skip(ctx: Context, skip_id: IdParam,
                           idempotency_key: IdempotencyParam = None) -> Annotated[CallToolResult, SkipWriteOut]:

@@ -25,8 +25,10 @@ def init_oauth(app) -> None:
 
     from .config import build_oauth_config
     from .routes import exempt_machine_endpoints, oauth_bp
+    from .security import install_log_redaction
     from .server import create_authorization_server
 
+    install_log_redaction()
     config = build_oauth_config(app.config)
     app.extensions["pycashflow_oauth_config"] = config
     app.extensions["pycashflow_oauth_server"] = create_authorization_server(app, config)
