@@ -584,7 +584,7 @@ class TestCimd:
         params = oauth.authorize_params(url, challenge=challenge, redirect_uri=redirect)
         page = oauth.login_as(uid).get(oauth.url(params)).get_data(as_text=True)
         host = "chatgpt.com" if "chatgpt" in url else "claude.ai"
-        assert f"Application identity published by <strong" in page and host in page
+        assert "Application identity published by <strong" in page and host in page
         code = oauth.redirect_params(oauth.approve(oauth.login_as(uid), params))["code"]
         resp = oauth.exchange(url, code, verifier, redirect_uri=redirect)
         assert resp.status_code == 200

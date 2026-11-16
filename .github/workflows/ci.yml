@@ -96,3 +96,14 @@ jobs:
         env:
           SMOKE_DB: postgres
         run: .github/scripts/docker-smoke-test.sh pycashflow:ci "ci-${{ github.sha }}"
+
+      - name: Smoke test image (SQLite, MCP enabled / ASGI worker)
+        env:
+          SMOKE_MCP: "true"
+        run: .github/scripts/docker-smoke-test.sh pycashflow:ci "ci-${{ github.sha }}"
+
+      - name: Smoke test image (PostgreSQL, MCP enabled / ASGI worker)
+        env:
+          SMOKE_DB: postgres
+          SMOKE_MCP: "true"
+        run: .github/scripts/docker-smoke-test.sh pycashflow:ci "ci-${{ github.sha }}"

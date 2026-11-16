@@ -157,6 +157,11 @@ jobs:
           SMOKE_DB: postgres
         run: .github/scripts/docker-smoke-test.sh "${IMAGE}:${{ steps.version.outputs.version }}" "${{ steps.version.outputs.version }}"
 
+      - name: Smoke test image (SQLite, MCP enabled / ASGI worker)
+        env:
+          SMOKE_MCP: "true"
+        run: .github/scripts/docker-smoke-test.sh "${IMAGE}:${{ steps.version.outputs.version }}" "${{ steps.version.outputs.version }}"
+
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
         with:

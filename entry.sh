@@ -114,6 +114,32 @@ GUNICORN_WORKERS="${RESOLVED_GUNICORN_WORKERS}"
 GUNICORN_TIMEOUT="${GUNICORN_TIMEOUT:-240}"
 GUNICORN_THREADS="${GUNICORN_THREADS:-8}"
 
+MCP_ENABLED_RESOLVED="$(get_env_or_dotenv "MCP_ENABLED" "false")"
+MCP_ENABLED_NORMALIZED="$(printf '%s' "${MCP_ENABLED_RESOLVED}" | tr '[:upper:]' '[:lower:]')"
+case "${MCP_ENABLED_NORMALIZED}" in
+    true|1|yes|on) START_MCP=true ;;
+    *) START_MCP=false ;;
+esac
+
+if [ "${START_MCP}" = "true" ]; then
+    # MCP integration enabled: the same gunicorn binary runs its native ASGI
+    # worker. app.asgi routes /mcp to the MCP server and everything else to
+    # the unchanged Flask app (run in a thread pool sized by GUNICORN_THREADS).
+    # The lifespan protocol starts/stops the MCP session manager per worker.
+    echo "Starting Gunicorn (ASGI, MCP enabled): workers=${GUNICORN_WORKERS}, flask threads=${GUNICORN_THREADS}, timeout=${GUNICORN_TIMEOUT}, bind=0.0.0.0:5000"
+    export GUNICORN_THREADS
+    exec su-exec appuser gunicorn \
+        --bind 0.0.0.0:5000 \
+        --workers "${GUNICORN_WORKERS}" \
+        --worker-class asgi \
+        --asgi-lifespan on \
+        --timeout "${GUNICORN_TIMEOUT}" \
+        --access-logfile - \
+        --error-logfile - \
+        --capture-output \
+        'app.asgi:create_asgi_app()'
+fi
+
 echo "Starting Gunicorn: workers=${GUNICORN_WORKERS}, threads=${GUNICORN_THREADS}, timeout=${GUNICORN_TIMEOUT}, bind=0.0.0.0:5000"
 
 # Run gunicorn as appuser (exec replaces the root shell — no root process remains)

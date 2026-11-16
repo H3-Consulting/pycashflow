@@ -55,7 +55,6 @@ def _reject_past_onetime(frequency, start: date) -> None:
 
 def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str, write_scope: str,
                    semantics: str) -> None:
-    singular_title = noun.capitalize()
 
     @mcp.tool(
         name=f"list_{plural}",
