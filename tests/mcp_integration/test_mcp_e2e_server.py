@@ -11,6 +11,7 @@ real Alembic migrations, with CSRF and rate limiting enabled. It then:
 """
 
 import asyncio
+import html
 import os
 import re
 import socket
@@ -156,8 +157,13 @@ def test_end_to_end_oauth_mcp_web_and_rest(live_server):
     approved = browser.post(authorize, data={
         "csrf_token": _csrf(consent.text), "consent_ticket": ticket, "decision": "approve",
         "grant_scope": ["projections:read", "schedules:read", "schedules:write"]})
-    assert approved.status_code == 302
-    callback = urlsplit(approved.headers["location"])
+    # A continue page, not a 302: the consent form's CSP (form-action 'self')
+    # would make a browser drop a cross-origin redirect after the POST.
+    assert approved.status_code == 200 and "location" not in approved.headers
+    assert "form-action 'self'" in (approved.headers.get("content-security-policy")
+                                    or approved.headers.get("content-security-policy-report-only") or "")
+    continue_url = html.unescape(re.search(r'id="oauth-continue" href="([^"]+)"', approved.text).group(1))
+    callback = urlsplit(continue_url)
     params = {k: v[0] for k, v in parse_qs(callback.query).items()}
     assert f"{callback.scheme}://{callback.netloc}{callback.path}" == redirect_uri
     assert params["state"] == "e2e-state" and params["iss"] == base

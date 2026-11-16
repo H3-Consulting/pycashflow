@@ -70,6 +70,7 @@ test reproduces the attack and now passes.
 | F15 | Info | AGENTS.md describes holds as "pausing"; the engine applies a hold as an extra transaction tomorrow. | MCP descriptions document the real behaviour | Documented |
 | F16 | Info | Tool results contained correlation ids (OpenAI data-minimisation rule). | Removed from results; kept in audit log | Fixed |
 | F17 | Info | `entry.sh` would not have served `/mcp` with MCP enabled. | ASGI command when enabled; smoke test checks it | Fixed, verified in Docker |
+| F18 | Medium (availability) | Found in production testing (Claude for iOS): clicking Allow did nothing. The enforced CSP `form-action 'self'` made browsers drop the cross-origin 302 from the consent POST to the client's callback. | The POST answers with a page that navigates to the callback; the CSP is unchanged | Fixed, verified in Chromium with CSP enforced (`TestConsentHandoffUnderFormActionCsp`) |
 
 No critical findings. All high-severity findings are fixed and covered by
 tests.

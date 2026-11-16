@@ -3,6 +3,7 @@
 import asyncio
 import base64
 import hashlib
+import html
 import re
 import secrets
 from datetime import datetime, timezone
@@ -85,9 +86,24 @@ class OAuthHelper:
         })
 
     @staticmethod
-    def redirect_params(resp):
-        assert resp.status_code == 302, resp.get_data(as_text=True)[:500]
-        query = parse_qs(urlsplit(resp.headers["Location"]).query)
+    def redirect_location(resp):
+        """Where the response sends the browser back to the client.
+
+        GET-time errors are plain 302s. After the Allow/Deny POST the server
+        answers with a continue page (form-action CSP would block a
+        cross-origin 302), whose Continue link carries the same URL.
+        """
+        if resp.status_code == 302:
+            return resp.headers["Location"]
+        body = resp.get_data(as_text=True)
+        assert resp.status_code == 200 and "Location" not in resp.headers, body[:500]
+        match = re.search(r'id="oauth-continue" href="([^"]+)"', body)
+        assert match, "continue page has no Continue link"
+        return html.unescape(match.group(1))
+
+    @classmethod
+    def redirect_params(cls, resp):
+        query = parse_qs(urlsplit(cls.redirect_location(resp)).query)
         return {k: v[0] for k, v in query.items()}
 
     def exchange(self, client_id, code, verifier, *, redirect_uri=CLAUDE_REDIRECT, resource=RESOURCE, **extra):

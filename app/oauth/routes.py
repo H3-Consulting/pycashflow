@@ -11,7 +11,8 @@ from urllib.parse import urlsplit
 from authlib.common.urls import add_params_to_uri
 from authlib.oauth2.rfc6749 import OAuth2Error
 from flask import (
-    Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for,
+    Blueprint, abort, current_app, flash, jsonify, make_response, redirect, render_template,
+    request, url_for,
 )
 from flask_login import current_user, login_required
 from itsdangerous import BadSignature, SignatureExpired, URLSafeTimedSerializer
@@ -31,6 +32,7 @@ logger = logging.getLogger(__name__)
 oauth_bp = Blueprint("oauth", __name__)
 
 CONSENT_TICKET_MAX_AGE = 600
+_REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
 _GC_INTERVAL_SECONDS = 600
 _gc_lock = threading.Lock()
 _last_gc = 0.0
@@ -225,9 +227,43 @@ def _scope_choices(scopes: list[str], user) -> tuple[list[dict], list[str]]:
     return choices, withheld
 
 
+def _continue_to_client(response):
+    """Send the browser on to the client with a page instead of a redirect.
+
+    The consent page keeps the app-wide CSP ``form-action 'self'``. Browsers
+    apply that directive to every redirect that follows a form submission, so
+    a 302 from the Allow/Deny POST to the client's callback (another origin),
+    or any redirect the callback makes after it, is silently blocked: the user
+    clicks Allow and nothing happens. Navigating from a page is an ordinary
+    navigation that form-action does not govern, so the CSP stays strict.
+    Same-origin (relative) redirects and non-redirect responses pass through.
+    """
+    response = make_response(response)
+    if response.status_code not in _REDIRECT_STATUSES:
+        return response
+    location = response.headers.get("Location", "")
+    target = urlsplit(location)
+    if not target.scheme:
+        return response
+    page = make_response(render_template(
+        "oauth_continue.html", location=location, host=target.hostname or target.scheme,
+    ))
+    page.headers["Cache-Control"] = "no-store"
+    # The page URL is our own authorize endpoint; nothing is gained by sending it on.
+    page.headers["Referrer-Policy"] = "no-referrer"
+    return page
+
+
 @oauth_bp.route("/oauth/authorize", methods=["GET", "POST"])
 @limiter.limit("30 per minute", methods=["POST"])
 def authorize():
+    response = _authorize()
+    if request.method == "POST":
+        return _continue_to_client(response)
+    return response
+
+
+def _authorize():
     if not current_user.is_authenticated:
         if request.method == "POST":
             return _render_authorize_error("Your session expired. Start the connection again from your app.", 401)

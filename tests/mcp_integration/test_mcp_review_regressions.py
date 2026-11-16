@@ -18,7 +18,9 @@ from app.oauth.config import DEFAULT_REDIRECT_URIS
 from app.oauth.security import RedirectPolicy
 from app.services import projections
 
-from mcp_integration.mcp_helpers import ALL_SCOPES, CLAUDE_REDIRECT, error_code, schedule_id, utcnow
+from mcp_integration.mcp_helpers import (
+    ALL_SCOPES, CHATGPT_REDIRECT, CLAUDE_REDIRECT, error_code, pkce_pair, schedule_id, utcnow,
+)
 
 PING = {"jsonrpc": "2.0", "id": 1, "method": "ping"}
 
@@ -220,3 +222,66 @@ class TestCodexReviewFindings:
         follow_up = mcp.call(token, "update_schedule", {"schedule_id": created["item"]["id"], "amount": "30.00",
                                                         "expected_etag": updated.structured_content["item"]["etag"]})
         assert not follow_up.is_error, follow_up.structured_content
+
+
+class TestConsentHandoffUnderFormActionCsp:
+    """Production enforces the app-wide CSP ``form-action 'self'``.
+
+    Browsers apply form-action to every redirect after a form submission, so a
+    cross-origin 302 from the Allow/Deny POST is silently dropped: the user
+    clicks Allow and nothing happens (reported on Claude for iOS). The POST
+    must answer with a page that navigates to the client instead.
+    """
+
+    @staticmethod
+    def _decide(oauth, make_user, decision="approve", state="state-123", redirect_uri=CLAUDE_REDIRECT):
+        uid = make_user()
+        info = oauth.register(redirect_uris=[redirect_uri])
+        _v, challenge = pkce_pair()
+        params = oauth.authorize_params(info["client_id"], challenge=challenge, state=state,
+                                        redirect_uri=redirect_uri)
+        return oauth.approve(oauth.login_as(uid), params, decision=decision)
+
+    @staticmethod
+    def _csp(resp):
+        return (resp.headers.get("Content-Security-Policy")
+                or resp.headers.get("Content-Security-Policy-Report-Only") or "")
+
+    @pytest.mark.parametrize("redirect_uri", [CLAUDE_REDIRECT, CHATGPT_REDIRECT])
+    def test_allow_answers_with_continue_page_not_cross_origin_redirect(self, oauth, make_user, redirect_uri):
+        resp = self._decide(oauth, make_user, redirect_uri=redirect_uri)
+        assert resp.status_code == 200 and "Location" not in resp.headers
+        target = oauth.redirect_location(resp)
+        assert target.startswith(redirect_uri + "?")
+        params = oauth.redirect_params(resp)
+        assert params["code"].startswith("pcf_ac_") and params["state"] == "state-123"
+        body = resp.get_data(as_text=True)
+        # Script, meta refresh (no JavaScript) and a link all point at the client.
+        assert 'http-equiv="refresh"' in body and "window.location.replace(" in body
+        # The CSP is unchanged: still form-action 'self' only.
+        assert "form-action 'self';" in self._csp(resp) + ";"
+        assert "claude.ai" not in self._csp(resp) and "chatgpt.com" not in self._csp(resp)
+        assert resp.headers["Cache-Control"] == "no-store"
+        assert resp.headers["Referrer-Policy"] == "no-referrer"
+
+    def test_deny_also_uses_continue_page(self, oauth, make_user):
+        resp = self._decide(oauth, make_user, decision="deny")
+        assert resp.status_code == 200 and "Location" not in resp.headers
+        params = oauth.redirect_params(resp)
+        assert params["error"] == "access_denied" and params["state"] == "state-123"
+
+    def test_state_cannot_inject_markup_into_continue_page(self, oauth, make_user):
+        state = '"><script>alert(1)</script>'
+        resp = self._decide(oauth, make_user, state=state)
+        body = resp.get_data(as_text=True)
+        assert "<script>alert(1)</script>" not in body
+        assert oauth.redirect_params(resp)["state"] == state
+
+    def test_get_time_errors_still_redirect_directly(self, oauth, make_user):
+        # No form submission is involved, so form-action does not apply.
+        uid = make_user()
+        info = oauth.register()
+        _v, challenge = pkce_pair()
+        params = oauth.authorize_params(info["client_id"], challenge=challenge, scope="nonexistent:scope")
+        resp = oauth.login_as(uid).get(oauth.url(params))
+        assert resp.status_code == 302 and resp.headers["Location"].startswith(CLAUDE_REDIRECT + "?")

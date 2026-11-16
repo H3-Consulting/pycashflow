@@ -52,6 +52,12 @@ hooks. Registered only when `MCP_ENABLED=true`.
 7. Code (`pcf_ac_…`, 256-bit) is stored hashed with user, client, redirect
    URI, scopes, resource, PKCE challenge; expires in 5 minutes. Redirect
    carries `code`, `state`, `iss`.
+   The Allow/Deny POST answers with a short "Returning to <host>" page
+   (`oauth_continue.html`: script, meta refresh, Continue link; `no-store`,
+   `no-referrer`) rather than a 302. The app-wide CSP has `form-action
+   'self'`, and browsers apply it to every redirect that follows a form
+   submission, so a cross-origin 302 to the client's callback would be
+   silently dropped. GET-time errors still redirect directly.
 8. `POST /oauth/token`: client authentication per its registered method; code
    is claimed atomically (`UPDATE … WHERE used_at IS NULL`); PKCE verifier
    required for every client; `redirect_uri` and `resource` must match the
