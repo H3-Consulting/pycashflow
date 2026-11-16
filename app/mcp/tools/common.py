@@ -149,12 +149,14 @@ def projection_after_change(principal, horizon_days: int = projections.DEFAULT_W
 
 
 def _summarise_after_change(principal, horizon_days: int):
-    result = projections.run_projection(principal.effective_user_id)
+    result = projections.run_projection(principal.effective_user_id, settle=True)
     today = date.today()
-    series = projections.daily_balances(result.run, today, today + timedelta(days=horizon_days))
+    end, _complete = projections.capped_window_end(principal.effective_user_id,
+                                                   today + timedelta(days=horizon_days))
+    series = projections.daily_balances(result.run, today, end)
     stats = projections.series_stats(series)
     return ProjectionAfterChange(
-        horizon_days=horizon_days,
+        horizon_days=max(0, (end - today).days),
         lowest_balance=money(stats["minimum_balance"]),
         lowest_balance_date=iso(stats["minimum_balance_date"]),
         ending_balance=money(stats["ending_balance"]),

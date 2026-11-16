@@ -96,9 +96,11 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
 
         def body(principal, cid):
             record = records.create_item(kind, principal.effective_user_id, dict(payload))
-            created = item_out(record)
-            return ItemWriteOut(action="created", item=created, deleted=None,
-                                projection_after_change=projection_after_change(principal))
+            # Summarise first: projection maintenance may advance the new
+            # item's start date, and the returned etag must match the stored row.
+            summary = projection_after_change(principal)
+            return ItemWriteOut(action="created", item=_current(kind, principal, record.id), deleted=None,
+                                projection_after_change=summary)
 
         return await runner.run(ctx, tool=f"create_{noun}", scopes=[write_scope], fn=body, write=True,
                                 resource_type=noun, idempotency_key=idempotency_key,
@@ -129,8 +131,9 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
         def body(principal, cid):
             record = records.update_item(kind, principal.effective_user_id, item_id, changes,
                                          expected_etag=expected_etag)
-            return ItemWriteOut(action="updated", item=item_out(record), deleted=None,
-                                projection_after_change=projection_after_change(principal))
+            summary = projection_after_change(principal)
+            return ItemWriteOut(action="updated", item=_current(kind, principal, record.id), deleted=None,
+                                projection_after_change=summary)
 
         return await runner.run(ctx, tool=f"update_{noun}", scopes=[write_scope], fn=body, write=True,
                                 resource_type=noun, idempotency_key=idempotency_key,
@@ -177,6 +180,12 @@ def _register_kind(mcp, runner, *, kind, noun: str, plural: str, read_scope: str
                       f"Requires {write_scope}."),
          annotations=mutating(f"Delete {noun}", idempotent=True), scopes=[write_scope],
          rename={"item_id": f"{noun}_id"})
+
+
+def _current(kind, principal, item_id):
+    """Serialise the item as stored now (after any projection maintenance)."""
+    row = kind.model.query.filter_by(user_id=principal.effective_user_id, id=item_id).first()
+    return item_out(row) if row is not None else None
 
 
 def _add(mcp, fn, *, name, title, description, annotations, scopes, rename=None):

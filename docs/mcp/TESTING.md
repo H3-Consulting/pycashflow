@@ -49,21 +49,22 @@ ChatGPT and Claude need a public HTTPS URL (e.g. a staging host).
 | `test_mcp_projections.py` | 17 | Every projection tool uses `commit=True`; maintenance persisted; other accounts untouched; changes via REST visible on next MCP call; parity with `/api/v1/projections`, `/dashboard` (min balance, risk score) and `/transactions`; window validation; shortfalls; stale balance notes |
 | `test_mcp_concurrency.py` | 7 | Concurrent projections converge; identical creates → one record; concurrent holds → one; same-etag updates → one wins; concurrent deletes → one; concurrent idempotent tool calls; rollback after a failed commit |
 | `test_mcp_feature_flag_and_hygiene.py` | 19 | Disabled flag registers no OAuth/MCP routes and ASGI serves Flask only; enabled without base URL fails closed while the app runs; base-URL validation; no secrets in logs or DB; audit rows contain no names/amounts; registration size limit; Authlib redaction; OpenAI domain-verification route |
-| `test_mcp_review_regressions.py` | 35 | Regression tests for every independent-review finding (guest removal, scope leakage, post-commit failures, `/mcp/` handling, redirect pinning, CIMD hardening, client-cap reclaim) |
+| `test_mcp_review_regressions.py` | 41 | Regression tests for every independent-review finding (guest removal, scope leakage, post-commit failures, `/mcp/` handling, redirect pinning, CIMD hardening, client-cap reclaim) and the Codex PR-review findings (stale-start coverage invariant for quarterly/monthly/weekly items, settled projections, REST stays single-pass, returned etags match the stored row) |
 | `test_mcp_e2e_server.py` | 1 | Real gunicorn ASGI server: discovery, DCR, login form + consent form with CSRF, PKCE exchange, MCP initialize/list/create/summary/insufficient-scope over Streamable HTTP with the official SDK client, refresh rotation, web dashboard/settings/connected apps, REST login/schedules/dashboard, token-type separation |
-| **Total** | **1,086** | |
+| **Total** | **1,092** | |
 
 ## Regression results
 
 | Environment | Result |
 |---|---|
-| Python 3.13.18, SQLite, MCP enabled | 1080 passed, 6 skipped (PostgreSQL-only concurrency tests) |
-| Python 3.13.18, PostgreSQL 16, MCP enabled | **1086 passed** |
+| Python 3.13.18, SQLite, MCP enabled | 1086 passed, 6 skipped (PostgreSQL-only concurrency tests) |
+| Python 3.13.18, PostgreSQL 16, MCP enabled | **1092 passed** |
 | Python 3.13.18, SQLite, MCP disabled | 797 passed, 289 skipped (MCP tests skip themselves) |
 | Python 3.13.18, PostgreSQL 16, MCP disabled | 797 passed, 289 skipped |
 | Python 3.13.18, pre-existing 710 tests only, MCP enabled | **710 passed** |
-| Python 3.11.18 (documented minimum), SQLite | 1080 passed, 6 skipped |
-| Python 3.15.1, inside the built Alpine production image, SQLite | 1080 passed, 6 skipped |
+| Python 3.11.18 (documented minimum), SQLite | 1080 passed, 6 skipped (before the Codex review fixes) |
+| Python 3.15.1, inside the built Alpine production image, SQLite | 1080 passed, 6 skipped (before the Codex review fixes) |
+| GitHub Actions CI on the PR (3.11/3.15 × SQLite/PostgreSQL, Docker smoke incl. MCP variants) | all green on `eab15ff` |
 | Docker smoke test, SQLite, MCP disabled (gthread) | passed (no OAuth metadata exposed) |
 | Docker smoke test, SQLite, MCP enabled (ASGI) | passed (ASGI start, discovery, `/mcp` 401 challenge, login, dashboard, settings) |
 | Docker smoke test, PostgreSQL 17, MCP disabled | passed |

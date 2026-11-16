@@ -4,6 +4,7 @@ import socket
 import threading
 from dataclasses import replace
 from datetime import date, timedelta
+from decimal import Decimal
 
 import pytest
 
@@ -156,3 +157,66 @@ def test_registration_cap_reclaims_abandoned_clients(oauth, flask_app, monkeypat
                                                    "token_endpoint_auth_method": "none"})
     assert resp.status_code == 201
     assert OAuthClient.query.filter_by(client_id=abandoned["client_id"]).first() is None
+
+
+class TestCodexReviewFindings:
+    """Codex PR review: stale-start coverage and post-maintenance etags."""
+
+    def _stale_item(self, uid, name, frequency, days_ago, amount="500.00", type_="Expense"):
+        start = date.today() - timedelta(days=days_ago)
+        row = Schedule(user_id=uid, name=name, amount=amount, type=type_, frequency=frequency,
+                       startdate=start, firstdate=start)
+        _db.session.add(row)
+        _db.session.commit()
+        return row.id
+
+    @pytest.mark.parametrize("frequency,days_ago", [("Quarterly", 200), ("Monthly", 190), ("Weekly", 150)])
+    def test_long_window_balances_match_cash_flow_totals(self, mcp, make_user, issue_token, app_ctx,
+                                                         frequency, days_ago):
+        uid = make_user(balance="100000.00")
+        self._stale_item(uid, "Stale bill", frequency, days_ago)
+        end = (date.today() + timedelta(days=270)).isoformat()
+        result = mcp.call(issue_token(uid), "get_cashflow_projection", {"end_date": end}).structured_content
+        stats = result["baseline"]["stats"]
+        net = Decimal(result["baseline_cash_flow"]["net"])
+        assert Decimal(stats["ending_balance"]) - Decimal(stats["start_balance"]) == net
+        complete = result["projection_complete_through"]
+        assert complete is not None
+        assert result["window"]["end_date"] == min(end, complete)
+        if date.today().weekday() < 5:
+            # Maintenance advanced the stale date, so the full window is covered.
+            assert result["window"]["end_date"] == end
+
+    def test_settled_projection_is_stable(self, make_user, app_ctx):
+        uid = make_user(balance="10.00")
+        self._stale_item(uid, "Weekly stale", "Weekly", 400)
+        projections.run_projection(uid, settle=True)
+        before = projections._maintenance_signature(uid)
+        projections.run_projection(uid, settle=True)
+        assert projections._maintenance_signature(uid) == before
+
+    def test_rest_projection_stays_single_pass(self, make_user, app_ctx, monkeypatch):
+        uid = make_user(balance="10.00")
+        calls = []
+        real = projections._run_projection_once
+        monkeypatch.setattr(projections, "_run_projection_once",
+                            lambda user_id: calls.append(user_id) or real(user_id))
+        projections.run_projection(uid)
+        assert calls == [uid]
+
+    def test_returned_etag_matches_stored_row_after_maintenance(self, mcp, make_user, issue_token, app_ctx):
+        uid = make_user(balance="5000.00")
+        token = issue_token(uid)
+        past = (date.today() - timedelta(days=40)).isoformat()
+        created = mcp.call(token, "create_schedule", {
+            "name": "Back-dated", "amount": "20.00", "type": "Expense", "frequency": "Monthly",
+            "start_date": past}).structured_content
+        etag = created["item"]["etag"]
+        stored = mcp.call(token, "get_schedule", {"schedule_id": created["item"]["id"]}).structured_content
+        assert stored["etag"] == etag
+        updated = mcp.call(token, "update_schedule", {"schedule_id": created["item"]["id"], "amount": "25.00",
+                                                      "expected_etag": etag})
+        assert not updated.is_error, updated.structured_content
+        follow_up = mcp.call(token, "update_schedule", {"schedule_id": created["item"]["id"], "amount": "30.00",
+                                                        "expected_etag": updated.structured_content["item"]["etag"]})
+        assert not follow_up.is_error, follow_up.structured_content

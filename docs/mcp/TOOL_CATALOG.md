@@ -56,7 +56,11 @@ updated summary, so they carry the same annotation.
 - Frequencies: `Monthly`, `Quarterly`, `Yearly`, `Weekly`, `BiWeekly`, `Onetime`.
   Types: `Income`, `Expense`.
 - Forecast horizon: default 90 days, maximum 270 days (the engine expands
-  quarterly items four times from their next date, ≈ 9 months).
+  quarterly items four times from their next date, ≈ 9 months). MCP runs the
+  persistent pipeline until projection maintenance is settled (a second
+  `commit=True` pass when the first one advanced stale dates), then caps
+  windows at `projection_complete_through` — the last date every recurring
+  item is expanded to — and says so in `notes`. REST/web stay single-pass.
 
 ## Tools in detail
 

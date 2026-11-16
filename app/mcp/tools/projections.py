@@ -146,10 +146,19 @@ def register(mcp, runner) -> None:
         def body(principal, _cid):
             today = date.today()
             start, end = _parse_window(start_date, end_date, today)
-            result = projections.run_projection(principal.effective_user_id)
+            result = projections.run_projection(principal.effective_user_id, settle=True)
+            notes = []
+            end, complete_through = projections.capped_window_end(
+                principal.effective_user_id, end, include_scenarios=include_scenarios)
+            if complete_through is not None and end == complete_through and \
+                    (end_date is None or date.fromisoformat(end_date) > complete_through):
+                notes.append(f"Recurring items are only projected through {complete_through.isoformat()}; "
+                             "the window was shortened to that date.")
+            if end < start:
+                raise ValidationFailed({"start_date": (
+                    f"Projection data is only complete through {complete_through.isoformat()}")})
             baseline, base_stats = _series(result.run, start, end)
             scenario = comparison = None
-            notes = []
             if include_scenarios:
                 if result.run_scenario is None:
                     notes.append("No what-if scenarios are defined, so only the baseline is shown.")
@@ -172,6 +181,7 @@ def register(mcp, runner) -> None:
                 scenario=scenario,
                 scenario_comparison=comparison,
                 baseline_cash_flow=_cash_flow_totals(items, start, end),
+                projection_complete_through=complete_through.isoformat() if complete_through else None,
                 maintenance_performed=MAINTENANCE_NOTE,
                 notes=notes,
             )
@@ -201,13 +211,16 @@ def register(mcp, runner) -> None:
 
         def body(principal, _cid):
             today = date.today()
-            end = today + timedelta(days=horizon_days)
-            result = projections.run_projection(principal.effective_user_id)
+            result = projections.run_projection(principal.effective_user_id, settle=True)
+            end, complete_through = projections.capped_window_end(
+                principal.effective_user_id, today + timedelta(days=horizon_days),
+                include_scenarios=include_scenarios)
+            effective_days = max(0, (end - today).days)
             points = projections.daily_balances(result.run, today, end)
             stats = projections.series_stats(points)
             schedules, holds, skips, _scen = projections.load_inputs(principal.effective_user_id)
             items = [i for i in projections.upcoming_occurrences(
-                schedules, holds, skips, days=horizon_days + 1) if not i["skipped"]]
+                schedules, holds, skips, days=effective_days + 1) if not i["skipped"]]
             inflows = sorted((i for i in items if i["type"] == "Income"), key=lambda i: -float(i["amount"]))[:5]
             outflows = sorted((i for i in items if i["type"] == "Expense"), key=lambda i: -float(i["amount"]))[:5]
             risk = projections.risk_score(result)
@@ -222,7 +235,7 @@ def register(mcp, runner) -> None:
                 current_balance=money(result.balance_amount),
                 current_balance_date=result.balance_date.isoformat(),
                 current_balance_age_days=(today - result.balance_date).days,
-                horizon_days=horizon_days,
+                horizon_days=effective_days,
                 lowest_balance=money(stats["minimum_balance"]),
                 lowest_balance_date=iso(stats["minimum_balance_date"]),
                 ending_balance=money(stats["ending_balance"]),
@@ -248,6 +261,7 @@ def register(mcp, runner) -> None:
                 ),
                 scenario=scenario_stats,
                 scenario_comparison=comparison,
+                projection_complete_through=complete_through.isoformat() if complete_through else None,
                 maintenance_performed=MAINTENANCE_NOTE,
             )
 
@@ -272,7 +286,7 @@ def register(mcp, runner) -> None:
     ) -> Annotated[CallToolResult, UpcomingTransactionsOut]:
         def body(principal, _cid):
             today = date.today()
-            projections.run_projection(principal.effective_user_id)
+            projections.run_projection(principal.effective_user_id, settle=True)
             schedules, holds, skips, _scen = projections.load_inputs(principal.effective_user_id)
             items = projections.upcoming_occurrences(schedules, holds, skips, days=days + 1)
             return UpcomingTransactionsOut(

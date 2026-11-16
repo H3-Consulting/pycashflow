@@ -123,7 +123,7 @@ def register(mcp, runner) -> None:
         def body(principal, cid):
             # Bring the schedule's stored next date up to date first, exactly
             # like POST /api/v1/skips does, then validate the occurrence.
-            projections.run_projection(principal.effective_user_id)
+            projections.run_projection(principal.effective_user_id, settle=True)
             skip = records.create_skip(principal.effective_user_id, schedule_id, occurrence_date)
             ids = schedule_ids_by_name(principal.effective_user_id)
             created = skip_out(skip, ids)

@@ -155,14 +155,19 @@ def register(mcp, runner) -> None:
 
         def body(principal, _cid):
             today = date.today()
-            end = today + timedelta(days=horizon_days)
             # Establish the current baseline with the normal persistent pipeline.
-            result = projections.run_projection(principal.effective_user_id)
+            result = projections.run_projection(principal.effective_user_id, settle=True)
             schedules, holds, skips, _scen = projections.snapshot_inputs(principal.effective_user_id)
             _t, run_before, _rs = projections.project_detached(result.balance_amount, list(schedules),
                                                               list(holds), list(skips))
             target, apply_with = apply_proposed_change(principal, change, schedules, holds, skips)
             _t, run_after, _rs = projections.project_detached(result.balance_amount, schedules, holds, skips)
+            # Only compare dates every recurring item (before and after) covers.
+            end = today + timedelta(days=horizon_days)
+            for complete in (projections.coverage_end(schedules), projections.coverage_end(
+                    projections.load_inputs(principal.effective_user_id)[0])):
+                if complete is not None and complete < end:
+                    end = complete
             before_series = projections.daily_balances(run_before, today, end)
             after_series = projections.daily_balances(run_after, today, end)
             before, before_stats = _impact(before_series)
@@ -172,7 +177,7 @@ def register(mcp, runner) -> None:
             return PreviewOut(
                 change_type=change_type,
                 persisted=False,
-                horizon_days=horizon_days,
+                horizon_days=max(0, (end - today).days),
                 before=before,
                 after=after,
                 ending_balance_change=money(after_stats["ending_balance"] - before_stats["ending_balance"]),

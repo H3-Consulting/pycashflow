@@ -112,6 +112,9 @@ class CashflowProjectionOut(BaseModel):
     scenario: Series | None = Field(description="Baseline plus what-if scenarios (when requested)")
     scenario_comparison: ScenarioComparison | None
     baseline_cash_flow: CashFlowTotals = Field(description="Scheduled baseline inflows/outflows in the window")
+    projection_complete_through: IsoDate | None = Field(
+        description="Last date for which every recurring item is projected; windows are capped here"
+    )
     maintenance_performed: str
     notes: list[str]
 
@@ -168,6 +171,9 @@ class ProjectionSummaryOut(BaseModel):
     risk: RiskIndicators
     scenario: SeriesStats | None
     scenario_comparison: ScenarioComparison | None
+    projection_complete_through: IsoDate | None = Field(
+        description="Last date for which every recurring item is projected; the horizon is capped here"
+    )
     maintenance_performed: str
 
 

@@ -79,14 +79,46 @@ def _balance_amount(balance) -> float:
         return 0.0
 
 
-def run_projection(user_id: int) -> ProjectionResult:
+def _maintenance_signature(user_id: int) -> tuple:
+    """Fingerprint of the rows projection maintenance can change."""
+    def rows(model):
+        return tuple(
+            model.query.with_entities(model.id, model.startdate, model.firstdate)
+            .filter_by(user_id=user_id).order_by(model.id).all()
+        )
+
+    skips = tuple(r.id for r in Skip.query.with_entities(Skip.id).filter_by(user_id=user_id).order_by(Skip.id))
+    return rows(Schedule), rows(Scenario), skips
+
+
+def run_projection(user_id: int, *, settle: bool = False) -> ProjectionResult:
     """Run the persistent projection pipeline for *user_id*.
 
     Calls ``update_cash(..., commit=True)``. If a concurrent projection for the
     same account already removed an expired row (``StaleDataError``), the
     session is rolled back and the pipeline re-runs once on fresh rows; the
     maintenance it performs is deterministic, so the retry converges.
+
+    ``update_cash`` expands each item from the start date it was *given*, then
+    advances that stored date. After a long gap the first pass is therefore
+    built from stale start dates and covers a shorter horizon. With
+    ``settle=True`` (used by the MCP tools), the same persistent pipeline is
+    re-run while the previous pass changed maintained rows, so the result
+    reflects the maintained state — the same state later reads see. REST and
+    web keep their single-pass behaviour.
     """
+    if not settle:
+        return _run_projection_once(user_id)
+    result = None
+    for _ in range(3):
+        before = _maintenance_signature(user_id)
+        result = _run_projection_once(user_id)
+        if _maintenance_signature(user_id) == before:
+            break
+    return result
+
+
+def _run_projection_once(user_id: int) -> ProjectionResult:
     attempts = 2
     for attempt in range(1, attempts + 1):
         try:
@@ -309,6 +341,39 @@ def schedule_occurrence_dates(schedule, today: date | None = None, days: int = M
             if today < occ <= horizon:
                 dates.append(occ)
     return sorted(dates)
+
+
+def coverage_end(items, today: date | None = None) -> date | None:
+    """Last date through which every recurring item is expanded by the engine.
+
+    The engine expands each recurring item a fixed number of times from its
+    current start date (≈12 months monthly, ≈9 months quarterly, …). Windows
+    ending after the earliest item's last expanded occurrence could silently
+    miss payments, so callers cap their window here. ``None`` means no
+    recurring items (no limit).
+    """
+    recurring = [snapshot_item(i) for i in items if i.frequency != "Onetime"]
+    if not recurring:
+        return None
+    total, _ = calc_schedule(recurring, [], [], [], commit=False)
+    last: dict[str, date] = {}
+    if total is not None and not total.empty:
+        for row in total.itertuples(index=False):
+            occ = _as_date(row.date)
+            if row.name not in last or occ > last[row.name]:
+                last[row.name] = occ
+    return min(last.values()) if last else None
+
+
+def capped_window_end(user_id: int, requested_end: date, *, include_scenarios: bool = False,
+                      extra_items=()) -> tuple[date, date | None]:
+    """Return ``(effective_end, complete_through)`` for an account's inputs."""
+    schedules, _holds, _skips, scenarios = load_inputs(user_id)
+    items = list(schedules) + (list(scenarios) if include_scenarios else []) + list(extra_items)
+    complete_through = coverage_end(items)
+    if complete_through is not None and requested_end > complete_through:
+        return complete_through, complete_through
+    return requested_end, complete_through
 
 
 def risk_score(result: ProjectionResult) -> dict:
