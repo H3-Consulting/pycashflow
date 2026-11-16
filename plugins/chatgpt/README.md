@@ -94,12 +94,10 @@ publish a new Docker image (`release.yml` ignores those paths).
 
 ### Before a real submission
 
-- [ ] Record the reviewer demo video (see [Demo recording](#demo-recording))
-      and set `review.demo_recording_url`.
-- [ ] Merge H3-Consulting/pycashflow-site#35. It adds the support page
-      `supportURL` points to (`https://www.pycashflow.com/support`, a 404
-      until then) and the ChatGPT/Claude sections of the privacy policy and
-      terms.
+- [x] Demo video recorded; `review.demo_recording_url` is
+      `https://www.pycashflow.com/demo` (H3-Consulting/pycashflow-site#36).
+- [x] Support page, privacy policy and terms published
+      (H3-Consulting/pycashflow-site#35).
 - [ ] If the production MCP URL differs, pass `--mcp-url https://<host>/mcp`
       (the MCP URL cannot be changed after approval without OpenAI support).
 - [ ] Bump `version` for every re-upload.
