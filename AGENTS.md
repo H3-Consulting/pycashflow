@@ -154,7 +154,8 @@ seeded admin.
   and PostgreSQL, plus a Docker build and `.github/scripts/docker-smoke-test.sh`
   (boots the image, logs in, loads the dashboard) against SQLite and against
   PostgreSQL via a plain `postgresql://` URL (`SMOKE_DB=postgres`).
-- `.github/workflows/release.yml` runs when a PR is merged: bumps the version
+- `.github/workflows/release.yml` runs when a PR is merged (except PRs that
+  only change `ios-app/**` or `plugins/chatgpt/**`): bumps the version
   from the latest `vX.Y.Z` tag (patch by default; `release:minor` /
   `release:major` labels bump more, `release:skip` publishes nothing), runs the
   tests on SQLite and PostgreSQL, builds and smoke-tests the image on both, pushes `whahn1983/pycashflow:<version>`

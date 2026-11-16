@@ -89,7 +89,8 @@ same validation and:
 - fails on any other validation error.
 
 It never submits anything to OpenAI. Download the ZIP from the run and upload
-it by hand (section 3).
+it by hand (section 3). A merge that only changes `plugins/chatgpt/**` does not
+publish a new Docker image (`release.yml` ignores those paths).
 
 ### Before a real submission
 

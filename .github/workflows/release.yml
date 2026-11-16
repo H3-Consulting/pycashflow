@@ -5,6 +5,10 @@ name: Release Docker image
 # the image, smoke-test it, push <version> and latest to Docker Hub, and then
 # tag the commit and publish a GitHub release.
 #
+# Pull requests that only change the iOS app or the ChatGPT plugin package
+# skip the release: neither changes the server image's behaviour. The package
+# is built by chatgpt-package.yml instead.
+#
 # Version bump is patch by default. Add a label to the PR to change it:
 #   release:minor  -> X.(Y+1).0
 #   release:major  -> (X+1).0.0
@@ -24,6 +28,7 @@ on:
     types: [closed]
     paths-ignore:
       - "ios-app/**"
+      - "plugins/chatgpt/**"
   workflow_dispatch:
     inputs:
       bump:
