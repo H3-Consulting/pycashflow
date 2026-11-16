@@ -181,7 +181,7 @@ class TestAuthorize:
         _v, challenge = pkce_pair()
         resp = oauth.approve(oauth.login_as(uid), oauth.authorize_params(info["client_id"], challenge=challenge))
         params = oauth.redirect_params(resp)
-        assert resp.headers["Location"].startswith(CLAUDE_REDIRECT + "?")
+        assert oauth.redirect_location(resp).startswith(CLAUDE_REDIRECT + "?")
         assert params["state"] == "state-123" and params["iss"] == BASE
         assert params["code"].startswith("pcf_ac_")
 

@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+
+{% block content %}
+{# Hands the browser back to the connecting app after Allow/Deny. A page that
+   navigates onward is used instead of a 302 because the consent form's CSP
+   (form-action 'self') would block a cross-origin redirect after the form
+   submission. Script first, meta refresh without JavaScript, link last. #}
+<meta http-equiv="refresh" content="0;url={{ location }}">
+<div style="max-width: 520px; margin: 4rem auto;">
+    <div class="metric-card" style="padding: 2rem; text-align: center;">
+        <h2 style="color: var(--text-primary); font-size: 1.35rem;">
+            <i class="fa-solid fa-circle-notch fa-spin" style="color: var(--accent);"></i> Returning to {{ host }}
+        </h2>
+        <p style="color: var(--text-secondary); margin-bottom: 1.25rem;">If nothing happens in a few seconds, continue manually.</p>
+        <a id="oauth-continue" href="{{ location }}" class="btn-modern btn-primary-modern" style="text-decoration: none;">Continue</a>
+    </div>
+</div>
+<script>window.location.replace({{ location|tojson }});</script>
+{% endblock %}
