@@ -11,6 +11,16 @@ from flask import request, g
 from app import db
 from app.models import Schedule, Scenario, Balance, Hold, Skip, AISettings
 from app.cashflow import update_cash, calculate_cash_risk_score
+from app.services import access as access_service
+from app.services import projections as projection_service
+from app.services.records import apply_start_date
+from app.services.validation import (
+    MAX_NAME_LEN,
+    VALID_FREQUENCIES,
+    VALID_TYPES,
+    validate_balance_amount,
+    validate_item_payload,
+)
 from app.ai_insights import (
     AIProviderError,
     AIInsightsFormatError,
@@ -42,14 +52,15 @@ from app.api.serializers import (
 )
 
 
-_VALID_TYPES = {"Income", "Expense"}
-_VALID_FREQUENCIES = {"Monthly", "Quarterly", "Yearly", "Weekly", "BiWeekly", "Onetime"}
-_MAX_NAME_LEN = 100
+_VALID_TYPES = set(VALID_TYPES)
+_VALID_FREQUENCIES = set(VALID_FREQUENCIES)
+_MAX_NAME_LEN = MAX_NAME_LEN
 
 
 def _effective_user_id() -> int:
-    user = get_api_user()
-    return user.owner_user_id or user.account_owner_id or user.id
+    # Guest isolation: every data query filters by this id. The rule lives in
+    # app.services.access so the MCP integration applies the identical rule.
+    return access_service.effective_user_id(get_api_user())
 
 
 def _balance_owner_user():
@@ -69,7 +80,7 @@ def _forbid_guest_writes():
 
 
 def _latest_balance(user_id: int):
-    return Balance.query.filter_by(user_id=user_id).order_by(desc(Balance.date), desc(Balance.id)).first()
+    return projection_service.latest_balance(user_id)
 
 
 def _parse_limit_offset():
@@ -101,39 +112,15 @@ def _parse_limit_offset():
 
 
 def _validate_schedule_payload(body: dict) -> dict:
-    errors = {}
-    name_raw = body.get("name")
-    name = name_raw.strip() if isinstance(name_raw, str) else ""
-    if not name or len(name) > _MAX_NAME_LEN:
-        errors["name"] = f"Name must be between 1 and {_MAX_NAME_LEN} characters"
-
-    try:
-        float(body.get("amount"))
-    except (TypeError, ValueError):
-        errors["amount"] = "Amount must be a number"
-
-    if body.get("type") not in _VALID_TYPES:
-        errors["type"] = "Invalid type"
-    if body.get("frequency") not in _VALID_FREQUENCIES:
-        errors["frequency"] = "Invalid frequency"
-
-    start_date = body.get("start_date")
-    if not start_date:
-        errors["start_date"] = "start_date is required"
-    else:
-        try:
-            datetime.strptime(start_date, "%Y-%m-%d")
-        except ValueError:
-            errors["start_date"] = "start_date must be YYYY-MM-DD"
-    return errors
+    # Shared with the MCP integration; messages are unchanged for REST clients.
+    return validate_item_payload(body)
 
 
 def _validate_balance_payload(body: dict) -> dict:
     errors = {}
-    try:
-        float(body.get("amount"))
-    except (TypeError, ValueError):
-        errors["amount"] = "Amount must be a number"
+    amount_error = validate_balance_amount(body.get("amount"))
+    if amount_error:
+        errors["amount"] = amount_error
 
     date_val = body.get("date")
     if date_val:
@@ -152,19 +139,16 @@ def _project_data(user_id: int):
     if user_id in cache:
         return cache[user_id]
 
-    balance = _latest_balance(user_id)
-    try:
-        balance_amount = float(balance.amount)
-    except (ValueError, TypeError, AttributeError):
-        balance_amount = 0.0
-
-    schedules = Schedule.query.filter_by(user_id=user_id).all()
-    holds = Hold.query.filter_by(user_id=user_id).all()
-    skips = Skip.query.filter_by(user_id=user_id).all()
-    scenarios = Scenario.query.filter_by(user_id=user_id).all()
-
-    trans, run, run_scenario = update_cash(balance_amount, schedules, holds, skips, scenarios, commit=True)
-    result = (balance, balance_amount, trans, run, run_scenario)
+    # Persistent projection pipeline: update_cash(..., commit=True) on the
+    # account's own rows (see app.services.projections.run_projection).
+    projection = projection_service.run_projection(user_id)
+    result = (
+        projection.balance,
+        projection.balance_amount,
+        projection.trans,
+        projection.run,
+        projection.run_scenario,
+    )
     cache[user_id] = result
     return result
 
@@ -305,14 +289,11 @@ def api_update_schedule(schedule_id: int):
         return validation_error({"name": "Schedule name already exists"})
 
     start = datetime.strptime(body["start_date"], "%Y-%m-%d").date()
-    if start != record.startdate and start.day != record.startdate.day:
-        record.firstdate = start
-
     record.name = new_name
     record.amount = body["amount"]
     record.type = body["type"]
     record.frequency = body["frequency"]
-    record.startdate = start
+    apply_start_date(record, start)
     db.session.commit()
     return api_ok(serialize_schedule(record))
 
@@ -417,14 +398,11 @@ def api_update_scenario(scenario_id: int):
         return validation_error({"name": "Scenario name already exists"})
 
     start = datetime.strptime(body["start_date"], "%Y-%m-%d").date()
-    if start != record.startdate and start.day != record.startdate.day:
-        record.firstdate = start
-
     record.name = new_name
     record.amount = body["amount"]
     record.type = body["type"]
     record.frequency = body["frequency"]
-    record.startdate = start
+    apply_start_date(record, start)
     db.session.commit()
     return api_ok(serialize_scenario(record))
 
