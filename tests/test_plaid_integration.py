@@ -2687,3 +2687,511 @@ class TestRealtimeBalanceGuestRestrictions:
         assert not mock_upd.called
         with flask_app.app_context():
             _deconfigure_plaid(flask_app)
+
+
+# ── Connection health: expiring / expired consent ───────────────────────────
+#
+# Some institutions (Chase from Feb 2027) let consumers choose how long a
+# connection stays active. Plaid reports the end date as
+# ``item.consent_expiration_time`` on /item/get and returns
+# ITEM_LOGIN_REQUIRED once it passes. These tests cover recording the date,
+# flagging connections that need the user, and surfacing both in the UI.
+
+
+def _utcnow_naive():
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _plaid_api_exception(error_code, error_type="ITEM_ERROR"):
+    import json
+
+    from plaid.exceptions import ApiException
+
+    exc = ApiException(status=400, reason="Bad Request")
+    exc.body = json.dumps(
+        {
+            "error_type": error_type,
+            "error_code": error_code,
+            "error_message": "the login details of this item have changed",
+            "request_id": "req-test",
+        }
+    )
+    return exc
+
+
+def _make_item_get_response(
+    consent_expiration_time=None, error_code=None, last_successful_update=None
+):
+    error = SimpleNamespace(error_code=error_code) if error_code else None
+    item = SimpleNamespace(
+        consent_expiration_time=consent_expiration_time, error=error
+    )
+    status = SimpleNamespace(
+        transactions=SimpleNamespace(last_successful_update=last_successful_update)
+    )
+    return SimpleNamespace(item=item, status=status)
+
+
+def _reload_connection(user_id):
+    db.session.expire_all()
+    return PlaidConnection.query.filter_by(user_id=user_id).one()
+
+
+class TestCachedSyncConnectionHealth:
+    @pytest.mark.parametrize(
+        "error_code",
+        ["ITEM_LOGIN_REQUIRED", "USER_PERMISSION_REVOKED", "USER_ACCOUNT_REVOKED"],
+    )
+    def test_reconnect_error_flags_connection(self, flask_app, plaid_user, error_code):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user)
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.side_effect = (
+                    _plaid_api_exception(error_code)
+                )
+                result = plaid_service.update_plaid_balance_for_user(user)
+            assert result == {"status": "error", "reason": "reconnect_required"}
+            conn = _reload_connection(plaid_user)
+            assert conn.reconnect_required_at is not None
+            assert conn.last_sync_status == "reconnect_required"
+            assert "connect it again" in conn.last_sync_error
+            assert Balance.query.filter_by(user_id=plaid_user).count() == 0
+            _deconfigure_plaid(flask_app)
+
+    def test_generic_api_error_does_not_flag_connection(self, flask_app, plaid_user):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user)
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.side_effect = (
+                    _plaid_api_exception("INTERNAL_SERVER_ERROR", "API_ERROR")
+                )
+                result = plaid_service.update_plaid_balance_for_user(user)
+            assert result == {"status": "error", "reason": "plaid_api_error"}
+            conn = _reload_connection(plaid_user)
+            assert conn.reconnect_required_at is None
+            assert conn.last_sync_status == "plaid_api_error"
+            _deconfigure_plaid(flask_app)
+
+    def test_repeat_failure_keeps_first_flag_time(self, flask_app, plaid_user):
+        first_seen = _utcnow_naive() - timedelta(days=3)
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=first_seen)
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.side_effect = (
+                    _plaid_api_exception("ITEM_LOGIN_REQUIRED")
+                )
+                plaid_service.update_plaid_balance_for_user(user)
+            conn = _reload_connection(plaid_user)
+            assert abs((conn.reconnect_required_at - first_seen).total_seconds()) < 1
+            _deconfigure_plaid(flask_app)
+
+    def test_successful_sync_clears_flag(self, flask_app, plaid_user):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.return_value = (
+                    _make_balances_response("acct-1", available=10.0, current=11.0)
+                )
+                mock_client.return_value.item_get.return_value = (
+                    _make_item_get_response()
+                )
+                result = plaid_service.update_plaid_balance_for_user(user)
+            assert result["status"] == "ok"
+            conn = _reload_connection(plaid_user)
+            assert conn.reconnect_required_at is None
+            _deconfigure_plaid(flask_app)
+
+    def test_item_get_failure_keeps_flag(self, flask_app, plaid_user):
+        """/accounts/get can serve cached data for a broken Item, so a
+        failed /item/get must not be read as the connection recovering."""
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.return_value = (
+                    _make_balances_response("acct-1", available=10.0, current=11.0)
+                )
+                mock_client.return_value.item_get.side_effect = (
+                    _plaid_api_exception("INTERNAL_SERVER_ERROR", "API_ERROR")
+                )
+                plaid_service.update_plaid_balance_for_user(user)
+            conn = _reload_connection(plaid_user)
+            assert conn.reconnect_required_at is not None
+            _deconfigure_plaid(flask_app)
+
+    def test_item_error_on_item_get_flags_connection(self, flask_app, plaid_user):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user)
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.return_value = (
+                    _make_balances_response("acct-1", available=10.0, current=11.0)
+                )
+                mock_client.return_value.item_get.return_value = (
+                    _make_item_get_response(error_code="ITEM_LOGIN_REQUIRED")
+                )
+                plaid_service.update_plaid_balance_for_user(user)
+            conn = _reload_connection(plaid_user)
+            assert conn.reconnect_required_at is not None
+            _deconfigure_plaid(flask_app)
+
+    @pytest.mark.parametrize(
+        "raw",
+        [
+            datetime(2027, 2, 21, 5, 0, 0, tzinfo=timezone.utc),
+            "2027-02-21T05:00:00Z",
+        ],
+    )
+    def test_records_consent_expiration_from_item_get(self, flask_app, plaid_user, raw):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user)
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.return_value = (
+                    _make_balances_response("acct-1", available=10.0, current=11.0)
+                )
+                mock_client.return_value.item_get.return_value = (
+                    _make_item_get_response(consent_expiration_time=raw)
+                )
+                plaid_service.update_plaid_balance_for_user(user)
+            conn = _reload_connection(plaid_user)
+            assert conn.consent_expiration_time == datetime(2027, 2, 21, 5, 0, 0)
+            _deconfigure_plaid(flask_app)
+
+    def test_null_consent_expiration_clears_stored_value(self, flask_app, plaid_user):
+        """Plaid's null means no expiration is scheduled any more."""
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(
+                plaid_user, consent_expiration_time=datetime(2027, 2, 21, 0, 0, 0)
+            )
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.return_value = (
+                    _make_balances_response("acct-1", available=10.0, current=11.0)
+                )
+                mock_client.return_value.item_get.return_value = (
+                    _make_item_get_response(consent_expiration_time=None)
+                )
+                plaid_service.update_plaid_balance_for_user(user)
+            conn = _reload_connection(plaid_user)
+            assert conn.consent_expiration_time is None
+            _deconfigure_plaid(flask_app)
+
+    def test_item_get_failure_keeps_stored_expiration(self, flask_app, plaid_user):
+        stored = datetime(2027, 2, 21, 0, 0, 0)
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, consent_expiration_time=stored)
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.return_value = (
+                    _make_balances_response("acct-1", available=10.0, current=11.0)
+                )
+                mock_client.return_value.item_get.side_effect = (
+                    _plaid_api_exception("INTERNAL_SERVER_ERROR", "API_ERROR")
+                )
+                result = plaid_service.update_plaid_balance_for_user(user)
+            assert result["status"] == "ok"
+            conn = _reload_connection(plaid_user)
+            assert conn.consent_expiration_time == stored
+            _deconfigure_plaid(flask_app)
+
+    def test_expiration_saved_even_when_balance_update_is_skipped(
+        self, flask_app, plaid_user
+    ):
+        """The manual-newer skip branch returns early; health must persist."""
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+            user = User.query.get(plaid_user)
+            user.last_manual_balance_entry_at = _utcnow_naive()
+            db.session.commit()
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.return_value = (
+                    _make_balances_response("acct-1", available=10.0, current=11.0)
+                )
+                mock_client.return_value.item_get.return_value = (
+                    _make_item_get_response(
+                        consent_expiration_time="2027-02-21T00:00:00Z"
+                    )
+                )
+                result = plaid_service.update_plaid_balance_for_user(user)
+            assert result["reason"] == "skipped_cached_plaid_update_manual_newer"
+            db.session.rollback()  # anything left uncommitted is discarded
+            conn = _reload_connection(plaid_user)
+            assert conn.consent_expiration_time == datetime(2027, 2, 21, 0, 0, 0)
+            assert conn.reconnect_required_at is None
+            _deconfigure_plaid(flask_app)
+
+
+class TestConnectionStatusHealthFields:
+    def _status_for(self, plaid_user, **conn_overrides):
+        _add_connection(plaid_user, **conn_overrides)
+        user = User.query.get(plaid_user)
+        return plaid_service.get_plaid_connection_status(user)["connection"]
+
+    def test_defaults_when_no_expiration_known(self, flask_app, plaid_user):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            conn = self._status_for(plaid_user)
+            assert conn["consent_expiration_time"] is None
+            assert conn["consent_expires_soon"] is False
+            assert conn["reconnect_required"] is False
+            _deconfigure_plaid(flask_app)
+
+    def test_expiring_within_warning_window(self, flask_app, plaid_user):
+        expires = (_utcnow_naive() + timedelta(days=5)).replace(microsecond=0)
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            conn = self._status_for(plaid_user, consent_expiration_time=expires)
+            assert conn["consent_expiration_time"] == expires.isoformat() + "Z"
+            assert conn["consent_expires_soon"] is True
+            assert conn["reconnect_required"] is False
+            _deconfigure_plaid(flask_app)
+
+    def test_far_expiration_is_not_soon(self, flask_app, plaid_user):
+        expires = _utcnow_naive() + timedelta(
+            days=plaid_service.CONSENT_EXPIRY_WARNING_DAYS + 30
+        )
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            conn = self._status_for(plaid_user, consent_expiration_time=expires)
+            assert conn["consent_expires_soon"] is False
+            assert conn["reconnect_required"] is False
+            _deconfigure_plaid(flask_app)
+
+    def test_past_expiration_means_reconnect_required(self, flask_app, plaid_user):
+        expires = _utcnow_naive() - timedelta(hours=1)
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            conn = self._status_for(plaid_user, consent_expiration_time=expires)
+            assert conn["consent_expires_soon"] is False
+            assert conn["reconnect_required"] is True
+            _deconfigure_plaid(flask_app)
+
+    def test_flagged_connection_reports_reconnect_required(self, flask_app, plaid_user):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            conn = self._status_for(plaid_user, reconnect_required_at=_utcnow_naive())
+            assert conn["reconnect_required"] is True
+            _deconfigure_plaid(flask_app)
+
+    def test_status_endpoint_exposes_health_fields(
+        self, flask_app, plaid_user, login_as
+    ):
+        expires = (_utcnow_naive() + timedelta(days=3)).replace(microsecond=0)
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, consent_expiration_time=expires)
+        client = login_as(plaid_user)
+        resp = client.get("/api/v1/plaid/status")
+        assert resp.status_code == 200
+        conn = resp.get_json()["data"]["connection"]
+        assert conn["consent_expiration_time"] == expires.isoformat() + "Z"
+        assert conn["consent_expires_soon"] is True
+        assert conn["reconnect_required"] is False
+        # Existing fields are still present (additive change only).
+        assert "last_sync_status" in conn
+        assert "access_token" not in resp.get_data(as_text=True)
+        with flask_app.app_context():
+            _deconfigure_plaid(flask_app)
+
+
+class TestRealtimeRefreshConnectionHealth:
+    def test_flagged_connection_skips_without_using_cooldown(
+        self, flask_app, plaid_user
+    ):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                result = plaid_service.realtime_update_plaid_balance_for_user(user)
+            assert result == {"status": "skipped", "reason": "reconnect_required"}
+            assert mock_client.return_value.accounts_balance_get.call_count == 0
+            conn = _reload_connection(plaid_user)
+            assert conn.last_realtime_balance_at is None
+            _deconfigure_plaid(flask_app)
+
+    def test_expired_consent_skips_without_using_cooldown(
+        self, flask_app, plaid_user
+    ):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(
+                plaid_user,
+                consent_expiration_time=_utcnow_naive() - timedelta(days=1),
+            )
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                result = plaid_service.realtime_update_plaid_balance_for_user(user)
+            assert result["reason"] == "reconnect_required"
+            assert mock_client.return_value.accounts_balance_get.call_count == 0
+            assert _reload_connection(plaid_user).last_realtime_balance_at is None
+            _deconfigure_plaid(flask_app)
+
+    def test_reconnect_error_during_call_flags_connection(
+        self, flask_app, plaid_user
+    ):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, last_sync_status="plaid_available_balance")
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_balance_get.side_effect = (
+                    _plaid_api_exception("ITEM_LOGIN_REQUIRED")
+                )
+                result = plaid_service.realtime_update_plaid_balance_for_user(user)
+            assert result["status"] == "error"
+            assert result["reason"] == "reconnect_required"
+            conn = _reload_connection(plaid_user)
+            assert conn.reconnect_required_at is not None
+            assert conn.last_realtime_refresh_status == "reconnect_required"
+            # The automatic sync's status column is left alone.
+            assert conn.last_sync_status == "plaid_available_balance"
+            _deconfigure_plaid(flask_app)
+
+    def test_generic_error_during_call_does_not_flag(self, flask_app, plaid_user):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user)
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_balance_get.side_effect = (
+                    _plaid_api_exception("INSTITUTION_DOWN", "INSTITUTION_ERROR")
+                )
+                result = plaid_service.realtime_update_plaid_balance_for_user(user)
+            assert result["reason"] == "plaid_api_error"
+            assert _reload_connection(plaid_user).reconnect_required_at is None
+            _deconfigure_plaid(flask_app)
+
+    def test_api_route_returns_409_reconnect_required(
+        self, flask_app, plaid_user, login_as
+    ):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+        client = login_as(plaid_user)
+        headers = _csrf_headers_for(client)
+        with patch.object(plaid_service, "_plaid_client") as mock_client:
+            resp = client.post("/api/v1/plaid/realtime-balance", headers=headers)
+        assert resp.status_code == 409
+        body = resp.get_json()
+        assert body["code"] == "plaid_reconnect_required"
+        assert body["status"] == 409
+        assert "Reconnect" in body["error"]
+        assert mock_client.return_value.accounts_balance_get.call_count == 0
+        with flask_app.app_context():
+            _deconfigure_plaid(flask_app)
+
+    def test_web_route_flashes_reconnect_message(
+        self, flask_app, plaid_user, login_as
+    ):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+        client = login_as(plaid_user)
+        with patch("app.main.safe_update_plaid_balance_for_user"):
+            resp = client.post("/refresh_realtime_balance", follow_redirects=True)
+        assert resp.status_code == 200
+        html = resp.get_data(as_text=True)
+        assert "remove the account, and connect it again" in html
+        with flask_app.app_context():
+            _deconfigure_plaid(flask_app)
+
+
+class TestDashboardConnectionAlert:
+    def _dashboard_html(self, client):
+        # Skip the live Plaid sync: these tests are about rendering only.
+        with patch("app.main.safe_update_plaid_balance_for_user"):
+            resp = client.get("/")
+        assert resp.status_code == 200
+        return resp.get_data(as_text=True)
+
+    def test_reconnect_banner_for_owner(self, flask_app, plaid_user, login_as):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+        html = self._dashboard_html(login_as(plaid_user))
+        assert 'data-plaid-alert="reconnect_required"' in html
+        assert "Test Bank" in html
+        assert "remove the account, and connect it again" in html
+        with flask_app.app_context():
+            _deconfigure_plaid(flask_app)
+
+    def test_expiring_banner_shows_date(self, flask_app, plaid_user, login_as):
+        expires = _utcnow_naive() + timedelta(days=4)
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, consent_expiration_time=expires)
+        html = self._dashboard_html(login_as(plaid_user))
+        assert 'data-plaid-alert="expires_soon"' in html
+        assert expires.strftime("%B %d, %Y") in html
+        with flask_app.app_context():
+            _deconfigure_plaid(flask_app)
+
+    def test_no_banner_when_connection_healthy(self, flask_app, plaid_user, login_as):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(
+                plaid_user,
+                consent_expiration_time=_utcnow_naive() + timedelta(days=120),
+            )
+        html = self._dashboard_html(login_as(plaid_user))
+        assert "data-plaid-alert" not in html
+        with flask_app.app_context():
+            _deconfigure_plaid(flask_app)
+
+    def test_no_banner_when_plaid_not_configured(self, flask_app, plaid_user, login_as):
+        with flask_app.app_context():
+            _deconfigure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+        html = self._dashboard_html(login_as(plaid_user))
+        assert "data-plaid-alert" not in html
+
+    def test_guest_sees_owner_connection_alert(
+        self, flask_app, plaid_user, make_user, login_as
+    ):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+        guest_id = make_user(admin=False, owner_id=plaid_user)
+        try:
+            html = self._dashboard_html(login_as(guest_id))
+            assert 'data-plaid-alert="reconnect_required"' in html
+            assert "account owner needs to reconnect" in html
+            # Guests can't change settings, so no link or bank name for them.
+            assert "remove the account" not in html
+        finally:
+            with flask_app.app_context():
+                User.query.filter_by(id=guest_id).delete()
+                db.session.commit()
+                _deconfigure_plaid(flask_app)
+
+    def test_alert_lookup_never_raises(self, flask_app, plaid_user):
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            user = User.query.get(plaid_user)
+            with patch.object(
+                plaid_service, "get_active_connection", side_effect=RuntimeError("db")
+            ):
+                assert plaid_service.get_plaid_connection_alert(user) is None
+            _deconfigure_plaid(flask_app)
+
+    def test_settings_page_renders_health_markup(self, auth_client):
+        html = auth_client.get("/settings").get_data(as_text=True)
+        assert "Connection expires:" in html
+        assert "plaid-reconnect-required" in html
+        assert "plaid-consent-expiring" in html

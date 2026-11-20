@@ -968,14 +968,43 @@
         });
     }
 
+    function formatLocalDate(utcString) {
+        if (!utcString) return '';
+        var d = new Date(utcString);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' });
+    }
+
+    function renderConnectionHealth(conn) {
+        // Plaid consent can expire (e.g. Chase lets people pick 6 or 12
+        // months). Without Link update mode, renewing means remove + connect.
+        if (conn.reconnect_required) {
+            return '<div id="plaid-reconnect-required" style="padding: 0.75rem; background-color: rgba(239,68,68,0.1); border-left: 4px solid var(--danger); border-radius: var(--radius-md); margin-bottom: 1rem;">' +
+                '<p style="margin: 0 0 0.25rem 0; font-weight: 600;">Reconnect required</p>' +
+                '<p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary);">' +
+                'This bank connection has expired or access was revoked, so your balance is no longer updating. ' +
+                'Remove the account below, then connect it again.</p></div>';
+        }
+        if (conn.consent_expires_soon) {
+            return '<div id="plaid-consent-expiring" style="padding: 0.75rem; background-color: rgba(245,158,11,0.1); border-left: 4px solid var(--warning); border-radius: var(--radius-md); margin-bottom: 1rem;">' +
+                '<p style="margin: 0 0 0.25rem 0; font-weight: 600;">Connection expires soon</p>' +
+                '<p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary);">' +
+                'This bank connection expires on ' + escapeHtml(formatLocalDate(conn.consent_expiration_time)) + '. ' +
+                'To keep your balance updating, remove the account below and connect it again before then.</p></div>';
+        }
+        return '';
+    }
+
     function renderConnected(conn) {
         var lastSync = formatLocalDateTime(conn.last_balance_sync_at);
         var lastRealtime = formatLocalDateTime(conn.last_realtime_balance_at);
+        var expires = formatLocalDate(conn.consent_expiration_time) || 'none scheduled';
         var html =
             '<div style="padding: 0.75rem; background-color: rgba(16,185,129,0.08); border-left: 4px solid var(--success); border-radius: var(--radius-md); margin-bottom: 1rem;">' +
             '<p style="margin: 0 0 0.25rem 0; font-weight: 600;">Plaid setup: configured</p>' +
             '<p style="margin: 0; font-size: 0.875rem; color: var(--text-secondary);">A Plaid account is currently connected.</p>' +
             '</div>' +
+            renderConnectionHealth(conn) +
             '<dl style="display: grid; grid-template-columns: max-content 1fr; gap: 0.25rem 1rem; font-size: 0.875rem; margin-bottom: 1rem;">' +
             '<dt style="color: var(--text-secondary);">Institution:</dt><dd style="margin:0;">' + escapeHtml(conn.institution_name || '—') + '</dd>' +
             '<dt style="color: var(--text-secondary);">Account:</dt><dd style="margin:0;">' + escapeHtml(conn.account_name || '—') + '</dd>' +
@@ -983,6 +1012,7 @@
             '<dt style="color: var(--text-secondary);">Type:</dt><dd style="margin:0;">' + escapeHtml(conn.account_type || '—') + (conn.account_subtype ? ' / ' + escapeHtml(conn.account_subtype) : '') + '</dd>' +
             '<dt style="color: var(--text-secondary);">Last cached refresh:</dt><dd style="margin:0;">' + escapeHtml(lastSync) + '</dd>' +
             '<dt style="color: var(--text-secondary);">Last real-time refresh:</dt><dd style="margin:0;">' + escapeHtml(lastRealtime) + '</dd>' +
+            '<dt style="color: var(--text-secondary);">Connection expires:</dt><dd style="margin:0;">' + escapeHtml(expires) + '</dd>' +
             '<dt style="color: var(--text-secondary);">Status:</dt><dd style="margin:0;">' + escapeHtml(conn.last_sync_status || '—') + '</dd>' +
             '</dl>' +
             '<button id="plaid-remove-btn" type="button" class="btn-modern" style="background: linear-gradient(135deg, #ef4444, #f87171); color: white; border: none; width: 100%;">' +

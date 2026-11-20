@@ -301,6 +301,15 @@ class PlaidConnection(db.Model):
     # of the automatic /accounts/get sync (last_sync_status/last_sync_error).
     last_realtime_refresh_status = db.Column(db.String(64), nullable=True)
     last_realtime_refresh_error = db.Column(db.String(255), nullable=True)
+    # When the bank consent behind this Item ends (naive UTC), as reported by
+    # Plaid's /item/get ``item.consent_expiration_time``. Null means no
+    # expiration is currently scheduled (or it has not been read yet). Some
+    # institutions, e.g. Chase, let consumers pick a 6- or 12-month limit.
+    consent_expiration_time = db.Column(db.DateTime, nullable=True)
+    # Set (naive UTC) when Plaid reports an Item error only the user can fix
+    # by going back through Plaid Link (expired or revoked consent, changed
+    # credentials). Cleared by the next successful /accounts/get sync.
+    reconnect_required_at = db.Column(db.DateTime, nullable=True)
     created_at = db.Column(
         db.DateTime,
         nullable=False,

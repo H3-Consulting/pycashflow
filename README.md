@@ -555,6 +555,40 @@ appropriate for your account (typically `auth`); **do not** include
 - Errors are swallowed by the dashboard call site — Plaid problems never
   break dashboard load.
 
+### Expiring and revoked bank connections
+
+Some banks let people limit how long a connection stays active (Chase offers
+six months, one year, or no limit; the first expirations begin
+February 21, 2027). When the limit passes, or the person revokes access at
+the bank, Plaid stops returning balances until they go back through Plaid
+Link. PyCashFlow handles this without webhooks:
+
+- **Expiration date.** Each successful dashboard sync already calls
+  `/item/get`; PyCashFlow stores its `item.consent_expiration_time` on the
+  connection (`null` means no expiration is scheduled).
+- **Reconnect required.** If a sync or live refresh gets an Item error only
+  the user can fix (`ITEM_LOGIN_REQUIRED`, `USER_PERMISSION_REVOKED`,
+  `USER_ACCOUNT_REVOKED`, `ACCESS_NOT_GRANTED`, `ITEM_LOCKED`,
+  `PASSWORD_RESET_REQUIRED`, `USER_SETUP_REQUIRED`, `NO_ACCOUNTS`,
+  `ITEM_NOT_FOUND`), the connection is flagged and `last_sync_status`
+  becomes `reconnect_required`. Other Plaid errors (outages, rate limits)
+  never set the flag. It is cleared only when a later sync's `/item/get`
+  shows the Item without an error (a successful `/accounts/get` alone is not
+  enough, since it can return cached data). A connection whose expiration
+  time has passed is treated the same way.
+- **Warnings.** The dashboard (owner and guest views) shows a warning
+  starting 14 days before expiry and an error once the connection needs
+  reconnecting; the Settings → **Plaid Balance Sync** dialog shows the
+  expiration date and the same warnings.
+- **Live refresh.** A connection that needs reconnecting is not sent to the
+  billed `/accounts/balance/get` call and does not use up the 24-hour
+  window. The API returns `409` with code `plaid_reconnect_required`.
+- **API.** `GET /api/v1/plaid/status` adds `consent_expiration_time`
+  (ISO 8601 UTC or `null`), `consent_expires_soon`, and `reconnect_required`
+  to the `connection` object.
+- **Renewing.** Link update mode is not supported yet, so renewing means
+  **Remove Plaid Account** and then **Connect Plaid Account** again.
+
 ### Protecting newer balances from stale cached Plaid data
 
 `/accounts/get` returns **cached** balance data — Plaid exposes its own
@@ -649,8 +683,11 @@ email-balance freshness migration adds one nullable
 `balance_email_datetime` column on the existing `email` table. The
 manual-balance freshness migration
 (`f8b1c2d3e4a5_add_last_manual_balance_entry_at_to_user`) adds one nullable
-`last_manual_balance_entry_at` column on the existing `user` table — no
-other schema changes.
+`last_manual_balance_entry_at` column on the existing `user` table. The
+connection-health migration
+(`c3e5f7a9b1d2_add_plaid_consent_expiration_and_reconnect`) adds two
+nullable columns, `consent_expiration_time` and `reconnect_required_at`, on
+`plaid_connections` — no other schema changes.
 
 ```bash
 flask db current
