@@ -261,13 +261,16 @@ def _apply_item_health(conn: PlaidConnection, item_response) -> bool:
 
     Records ``item.consent_expiration_time`` (null means none scheduled) and
     sets or clears the reconnect flag from ``item.error``. When /item/get
-    failed (``item_response`` is None) the stored expiration is left alone,
-    but the flag is still cleared because /accounts/get just succeeded.
+    failed (``item_response`` is None) nothing changes: /accounts/get can
+    return cached data for an Item that needs the user, so its success alone
+    does not prove the connection recovered.
     Returns True when anything on ``conn`` changed.
     """
-    changed = False
     item = _nested_get(item_response, "item")
+    if item is None:
+        return False
 
+    changed = False
     item_error_code = _nested_get(item, "error", "error_code")
     if _is_reconnect_error_code(item_error_code):
         if conn.reconnect_required_at is None:
@@ -277,13 +280,12 @@ def _apply_item_health(conn: PlaidConnection, item_response) -> bool:
         conn.reconnect_required_at = None
         changed = True
 
-    if item is not None:
-        expires = _normalize_naive_utc(_nested_get(item, "consent_expiration_time"))
-        if expires is not None:
-            expires = expires.replace(microsecond=0)
-        if expires != conn.consent_expiration_time:
-            conn.consent_expiration_time = expires
-            changed = True
+    expires = _normalize_naive_utc(_nested_get(item, "consent_expiration_time"))
+    if expires is not None:
+        expires = expires.replace(microsecond=0)
+    if expires != conn.consent_expiration_time:
+        conn.consent_expiration_time = expires
+        changed = True
 
     return changed
 

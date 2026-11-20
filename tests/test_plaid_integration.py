@@ -2809,6 +2809,25 @@ class TestCachedSyncConnectionHealth:
             assert conn.reconnect_required_at is None
             _deconfigure_plaid(flask_app)
 
+    def test_item_get_failure_keeps_flag(self, flask_app, plaid_user):
+        """/accounts/get can serve cached data for a broken Item, so a
+        failed /item/get must not be read as the connection recovering."""
+        with flask_app.app_context():
+            _configure_plaid(flask_app)
+            _add_connection(plaid_user, reconnect_required_at=_utcnow_naive())
+            user = User.query.get(plaid_user)
+            with patch.object(plaid_service, "_plaid_client") as mock_client:
+                mock_client.return_value.accounts_get.return_value = (
+                    _make_balances_response("acct-1", available=10.0, current=11.0)
+                )
+                mock_client.return_value.item_get.side_effect = (
+                    _plaid_api_exception("INTERNAL_SERVER_ERROR", "API_ERROR")
+                )
+                plaid_service.update_plaid_balance_for_user(user)
+            conn = _reload_connection(plaid_user)
+            assert conn.reconnect_required_at is not None
+            _deconfigure_plaid(flask_app)
+
     def test_item_error_on_item_get_flags_connection(self, flask_app, plaid_user):
         with flask_app.app_context():
             _configure_plaid(flask_app)

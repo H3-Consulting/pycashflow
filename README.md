@@ -572,8 +572,10 @@ Link. PyCashFlow handles this without webhooks:
   `PASSWORD_RESET_REQUIRED`, `USER_SETUP_REQUIRED`, `NO_ACCOUNTS`,
   `ITEM_NOT_FOUND`), the connection is flagged and `last_sync_status`
   becomes `reconnect_required`. Other Plaid errors (outages, rate limits)
-  never set the flag. The next successful sync clears it. A connection whose
-  expiration time has passed is treated the same way.
+  never set the flag. It is cleared only when a later sync's `/item/get`
+  shows the Item without an error (a successful `/accounts/get` alone is not
+  enough, since it can return cached data). A connection whose expiration
+  time has passed is treated the same way.
 - **Warnings.** The dashboard (owner and guest views) shows a warning
   starting 14 days before expiry and an error once the connection needs
   reconnecting; the Settings → **Plaid Balance Sync** dialog shows the
