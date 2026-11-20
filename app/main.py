@@ -37,6 +37,7 @@ from .ai_insights import (
 )
 from .password_setup import create_password_setup_link
 from .plaid_service import (
+    get_plaid_connection_alert,
     safe_update_plaid_balance_for_user,
     realtime_update_plaid_balance_for_user,
     remove_plaid_connections_for_user_ids,
@@ -90,7 +91,10 @@ def index():
     user_id = get_effective_user_id()
 
     # Refresh today's balance from Plaid (no-op if not configured/connected).
-    safe_update_plaid_balance_for_user(_get_balance_owner_user())
+    balance_owner = _get_balance_owner_user()
+    safe_update_plaid_balance_for_user(balance_owner)
+    # Warn when the bank connection is expiring or has stopped working.
+    plaid_alert = get_plaid_connection_alert(balance_owner)
 
     # get today's date
     todaydate = datetime.today().strftime('%A, %B %d, %Y')
@@ -149,12 +153,13 @@ def index():
         return render_template('index.html', title='Index', todaydate=todaydate, balance=balance.amount,
                            minbalance=minbalance, min_scenario=min_scenario, graphJSON=graphJSON,
                            ai_insights_data=ai_insights_data, ai_last_updated=ai_last_updated,
-                           ai_provider_configured=ai_provider_configured, cash_risk=cash_risk)
+                           ai_provider_configured=ai_provider_configured, cash_risk=cash_risk,
+                           plaid_alert=plaid_alert)
     else:
         return render_template('index_guest.html', title='Index', todaydate=todaydate, balance=balance.amount,
                            minbalance=minbalance, min_scenario=min_scenario, graphJSON=graphJSON,
                            ai_insights_data=ai_insights_data, ai_last_updated=ai_last_updated,
-                           cash_risk=cash_risk)
+                           cash_risk=cash_risk, plaid_alert=plaid_alert)
 
 
 @main.route('/refresh')
@@ -648,6 +653,13 @@ def refresh_realtime_balance():
         flash(
             "Live refresh is unavailable right now. Your cached Plaid balance "
             "will still update automatically.",
+            "error",
+        )
+    elif reason == "reconnect_required":
+        flash(
+            "Your bank connection has expired or access was revoked, so a "
+            "live refresh can't run. Go to Settings > Plaid Balance Sync, "
+            "remove the account, and connect it again.",
             "error",
         )
     elif status == "skipped" and reason == "no_balance_value":

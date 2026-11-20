@@ -32,6 +32,8 @@
 {% endif %}
 {% endwith %}
 
+{% with plaid_alert_guest = False %}{% include 'plaid_connection_alert.html' %}{% endwith %}
+
 <!-- Metrics Grid -->
 <div class="metrics-grid">
     <!-- Current Balance Card -->

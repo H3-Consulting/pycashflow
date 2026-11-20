@@ -59,6 +59,34 @@ REALTIME_BALANCE_COOLDOWN_SECONDS = 24 * 60 * 60
 # the live balance with stale data.
 REALTIME_BALANCE_PROTECTION_SECONDS = 5 * 60
 
+# Plaid Item error codes that only the user can fix by going back through
+# Plaid Link: expired or revoked consent (e.g. a Chase connection reaching
+# the 6- or 12-month limit the consumer picked returns ITEM_LOGIN_REQUIRED),
+# changed or locked bank credentials, or no usable accounts left. Generic
+# API failures and outages are deliberately not in this set.
+_RECONNECT_ERROR_CODES = frozenset(
+    {
+        "ITEM_LOGIN_REQUIRED",
+        "USER_PERMISSION_REVOKED",
+        "USER_ACCOUNT_REVOKED",
+        "ACCESS_NOT_GRANTED",
+        "ITEM_LOCKED",
+        "PASSWORD_RESET_REQUIRED",
+        "USER_SETUP_REQUIRED",
+        "NO_ACCOUNTS",
+        "ITEM_NOT_FOUND",
+    }
+)
+
+RECONNECT_REQUIRED_STATUS = "reconnect_required"
+_RECONNECT_REQUIRED_MESSAGE = (
+    "The bank connection has expired or access was revoked. "
+    "Remove it and connect it again."
+)
+
+# Warn this many days before Plaid's consent_expiration_time.
+CONSENT_EXPIRY_WARNING_DAYS = 14
+
 
 class PlaidServiceError(Exception):
     """Raised for any Plaid-related failure surfaced to a route.
@@ -182,6 +210,113 @@ def get_active_connection(user) -> PlaidConnection | None:
     )
 
 
+# ── Connection health (expiring / expired consent) ───────────────────────────
+
+
+def _utcnow_naive() -> datetime:
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
+def _is_reconnect_error_code(code) -> bool:
+    if not code or not isinstance(code, str):
+        return False
+    return code.strip().upper() in _RECONNECT_ERROR_CODES
+
+
+def _mark_reconnect_required(conn: PlaidConnection) -> None:
+    """Flag ``conn`` as needing the user to reconnect (keeps the first time)."""
+    if conn.reconnect_required_at is None:
+        conn.reconnect_required_at = _utcnow_naive()
+
+
+def connection_needs_reconnect(
+    conn: PlaidConnection | None, now: Optional[datetime] = None
+) -> bool:
+    """True when Plaid can no longer read this connection without the user.
+
+    Either a sync saw a reconnect-only Item error, or Plaid's consent
+    expiration time has already passed.
+    """
+    if conn is None:
+        return False
+    if conn.reconnect_required_at is not None:
+        return True
+    expires = conn.consent_expiration_time
+    return expires is not None and expires <= (now or _utcnow_naive())
+
+
+def connection_consent_expires_soon(
+    conn: PlaidConnection | None, now: Optional[datetime] = None
+) -> bool:
+    """True when consent ends within ``CONSENT_EXPIRY_WARNING_DAYS``."""
+    if conn is None or conn.consent_expiration_time is None:
+        return False
+    now = now or _utcnow_naive()
+    window_end = now + timedelta(days=CONSENT_EXPIRY_WARNING_DAYS)
+    return now < conn.consent_expiration_time <= window_end
+
+
+def _apply_item_health(conn: PlaidConnection, item_response) -> bool:
+    """Update ``conn`` from a /item/get response after /accounts/get worked.
+
+    Records ``item.consent_expiration_time`` (null means none scheduled) and
+    sets or clears the reconnect flag from ``item.error``. When /item/get
+    failed (``item_response`` is None) the stored expiration is left alone,
+    but the flag is still cleared because /accounts/get just succeeded.
+    Returns True when anything on ``conn`` changed.
+    """
+    changed = False
+    item = _nested_get(item_response, "item")
+
+    item_error_code = _nested_get(item, "error", "error_code")
+    if _is_reconnect_error_code(item_error_code):
+        if conn.reconnect_required_at is None:
+            _mark_reconnect_required(conn)
+            changed = True
+    elif conn.reconnect_required_at is not None:
+        conn.reconnect_required_at = None
+        changed = True
+
+    if item is not None:
+        expires = _normalize_naive_utc(_nested_get(item, "consent_expiration_time"))
+        if expires is not None:
+            expires = expires.replace(microsecond=0)
+        if expires != conn.consent_expiration_time:
+            conn.consent_expiration_time = expires
+            changed = True
+
+    return changed
+
+
+def get_plaid_connection_alert(user) -> dict | None:
+    """Return the dashboard warning for ``user``'s Plaid connection, if any.
+
+    ``kind`` is ``"reconnect_required"`` or ``"expires_soon"``. Never raises:
+    the dashboard must render even if this lookup fails.
+    """
+    try:
+        if user is None or not plaid_is_configured():
+            return None
+        conn = get_active_connection(user)
+        if conn is None:
+            return None
+        now = _utcnow_naive()
+        if connection_needs_reconnect(conn, now):
+            kind = RECONNECT_REQUIRED_STATUS
+        elif connection_consent_expires_soon(conn, now):
+            kind = "expires_soon"
+        else:
+            return None
+        return {
+            "kind": kind,
+            "institution_name": conn.institution_name,
+            "consent_expiration_time": conn.consent_expiration_time,
+        }
+    except Exception:
+        logger.exception("Could not build Plaid connection alert")
+        return None
+
+
 def get_plaid_connection_status(user) -> dict:
     """Return a safe, JSON-friendly status payload for the settings UI."""
     configured = plaid_is_configured()
@@ -193,6 +328,7 @@ def get_plaid_connection_status(user) -> dict:
     if conn is None:
         return payload
 
+    now = _utcnow_naive()
     payload["connected"] = True
     payload["connection"] = {
         "institution_name": conn.institution_name,
@@ -213,6 +349,9 @@ def get_plaid_connection_status(user) -> dict:
         "last_realtime_refresh_error": conn.last_realtime_refresh_error,
         "realtime_refresh_retry_after_seconds": _seconds_until_realtime_refresh(conn),
         "next_available_refresh_at": _iso_utc(_next_available_refresh_at(conn)),
+        "consent_expiration_time": _iso_utc(conn.consent_expiration_time),
+        "consent_expires_soon": connection_consent_expires_soon(conn, now),
+        "reconnect_required": connection_needs_reconnect(conn, now),
     }
     return payload
 
@@ -831,9 +970,17 @@ def update_plaid_balance_for_user(user) -> dict:
             info.get("error_code"),
             info.get("error_message"),
         )
-        _record_sync_status(conn, "plaid_api_error", "Plaid balance request failed.")
+        if _is_reconnect_error_code(info.get("error_code")):
+            _mark_reconnect_required(conn)
+            _record_sync_status(
+                conn, RECONNECT_REQUIRED_STATUS, _RECONNECT_REQUIRED_MESSAGE
+            )
+            reason = RECONNECT_REQUIRED_STATUS
+        else:
+            _record_sync_status(conn, "plaid_api_error", "Plaid balance request failed.")
+            reason = "plaid_api_error"
         db.session.commit()
-        result = {"status": "error", "reason": "plaid_api_error"}
+        result = {"status": "error", "reason": reason}
         if cache is not None:
             cache[user.id] = result
         return result
@@ -870,6 +1017,11 @@ def update_plaid_balance_for_user(user) -> dict:
             "freshness for user %s; falling back to account balance freshness",
             user.id,
         )
+
+    # /accounts/get worked, so record the consent expiration and reconnect
+    # state now: the skip branches below return without committing.
+    if _apply_item_health(conn, item_response):
+        db.session.commit()
 
     # Pull the matching account from the response.
     target = None
@@ -1123,6 +1275,11 @@ def realtime_update_plaid_balance_for_user(user) -> dict:
     if conn is None:
         return {"status": "skipped", "reason": "no_connection"}
 
+    # A connection Plaid already said needs the user (or whose consent has
+    # expired) cannot succeed, so don't spend the 24-hour window on it.
+    if connection_needs_reconnect(conn):
+        return {"status": "skipped", "reason": RECONNECT_REQUIRED_STATUS}
+
     # Atomic pre-call cooldown claim: succeeds only when the previous
     # refresh was >= 24 hours ago (or never).
     if not _claim_realtime_refresh_slot(conn.id):
@@ -1184,13 +1341,23 @@ def realtime_update_plaid_balance_for_user(user) -> dict:
             info.get("error_code"),
             info.get("error_message"),
         )
-        _record_realtime_status(
-            conn, "plaid_realtime_api_error", "Plaid real-time balance request failed."
-        )
+        if _is_reconnect_error_code(info.get("error_code")):
+            _mark_reconnect_required(conn)
+            _record_realtime_status(
+                conn, RECONNECT_REQUIRED_STATUS, _RECONNECT_REQUIRED_MESSAGE
+            )
+            reason = RECONNECT_REQUIRED_STATUS
+        else:
+            _record_realtime_status(
+                conn,
+                "plaid_realtime_api_error",
+                "Plaid real-time balance request failed.",
+            )
+            reason = "plaid_api_error"
         db.session.commit()
         return {
             "status": "error",
-            "reason": "plaid_api_error",
+            "reason": reason,
             "refreshed_at": _iso_utc(refreshed_at),
             "next_available_refresh_at": _iso_utc(_next_available_refresh_at(conn)),
         }

@@ -1,0 +1,36 @@
+{# Dashboard warning for an expiring or broken Plaid bank connection.
+   Expects ``plaid_alert`` (from plaid_service.get_plaid_connection_alert) and
+   ``plaid_alert_guest`` (true on the read-only guest dashboard). #}
+{% if plaid_alert %}
+{% set bank_name = plaid_alert.institution_name or 'your bank' %}
+{% if plaid_alert.kind == 'reconnect_required' %}
+<div class="alert plaid-connection-alert" role="alert" data-plaid-alert="reconnect_required" style="background-color: rgba(239, 68, 68, 0.1); border: 1px solid var(--danger); color: var(--text-primary); border-radius: var(--radius-md); margin-bottom: 1.5rem;">
+    <i class="fa-solid fa-link-slash"></i>
+    <strong>Bank connection needs attention.</strong>
+    {% if plaid_alert_guest %}
+    The bank connection for this account has stopped updating, so the balance
+    below may be out of date. The account owner needs to reconnect it.
+    {% else %}
+    PyCashFlow can no longer read the balance from {{ bank_name }} because the
+    connection expired or access was revoked, so the balance below may be out
+    of date. Go to <a href="{{ url_for('main.settings') }}">Settings</a> &gt;
+    Plaid Balance Sync, remove the account, and connect it again.
+    {% endif %}
+</div>
+{% elif plaid_alert.kind == 'expires_soon' %}
+{% set expires_on = plaid_alert.consent_expiration_time.strftime('%B %d, %Y') %}
+<div class="alert plaid-connection-alert" role="status" data-plaid-alert="expires_soon" style="background-color: rgba(245, 158, 11, 0.1); border: 1px solid var(--warning); color: var(--text-primary); border-radius: var(--radius-md); margin-bottom: 1.5rem;">
+    <i class="fa-solid fa-clock"></i>
+    <strong>Bank connection expiring.</strong>
+    {% if plaid_alert_guest %}
+    The bank connection for this account expires on {{ expires_on }}. The
+    account owner needs to renew it before then to keep the balance updating.
+    {% else %}
+    Your {{ bank_name }} connection expires on {{ expires_on }}. To keep your
+    balance updating, go to <a href="{{ url_for('main.settings') }}">Settings</a>
+    &gt; Plaid Balance Sync, remove the account, and connect it again before
+    then.
+    {% endif %}
+</div>
+{% endif %}
+{% endif %}

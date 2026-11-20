@@ -205,6 +205,16 @@ def api_plaid_realtime_balance():
             400,
         )
 
+    if reason == "reconnect_required":
+        # Expired or revoked bank consent; the cooldown was not consumed
+        # when this was already known before calling Plaid.
+        return api_error(
+            "Your bank connection has expired or access was revoked. "
+            "Reconnect it from Settings on the web.",
+            "plaid_reconnect_required",
+            409,
+        )
+
     if status == "rate_limited":
         return _cooldown_error_response(result)
 
