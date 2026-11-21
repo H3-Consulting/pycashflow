@@ -18,14 +18,16 @@ name: Release Docker image
 #   DOCKERHUB_USERNAME  Docker Hub account that can push whahn1983/pycashflow
 #   DOCKERHUB_TOKEN     Docker Hub access token (Read & Write) for that account
 #
-# pull_request_target (not pull_request) is used so the Docker Hub secrets are
-# available for merged PRs from forks too. It is safe here because the job only
-# runs after a maintainer has merged, and it checks out the merge commit that
-# is already on master rather than the PR head.
+# The workflow runs on the push to master that a merge makes, not on
+# pull_request_target: GitHub blocks pull_request_target by default in public
+# repositories from December 2, 2026. A push to master always runs the
+# workflow file on master with the repository secrets, whoever opened the PR.
+# The "plan" job finds the pull request that produced the pushed commit and
+# reads its labels; a push that no merged pull request produced (a direct
+# push) releases nothing.
 on:
-  pull_request_target:
+  push:
     branches: [master]
-    types: [closed]
     paths-ignore:
       - "ios-app/**"
       - "plugins/chatgpt/**"
@@ -38,7 +40,7 @@ on:
         default: patch
 
 permissions:
-  contents: write
+  contents: read
 
 # Serialize releases so two quick merges can't compute the same version.
 concurrency:
@@ -49,11 +51,72 @@ env:
   IMAGE: whahn1983/pycashflow
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      bump: ${{ steps.plan.outputs.bump }}
+    steps:
+      - name: Find the merged pull request and its release labels
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          BUMP_INPUT: ${{ inputs.bump }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          if [ "${EVENT_NAME}" = "workflow_dispatch" ]; then
+            echo "Manual run; bump: ${BUMP_INPUT:-patch}"
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "bump=${BUMP_INPUT:-patch}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # The pull request whose merge (squash, merge commit or rebase) made
+          # this commit. GitHub can take a few seconds after the push to link
+          # the commit to its pull request, so retry before giving up.
+          pr=""
+          for delay in 0 5 10 20 30; do
+            sleep "${delay}"
+            pr="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/pulls" \
+              --jq "map(select(.merged_at != null and .merge_commit_sha == \"${SHA}\"))
+                    | first // empty
+                    | {number, labels: [.labels[].name]}")"
+            [ -n "${pr}" ] && break
+          done
+
+          if [ -z "${pr}" ]; then
+            echo "::warning::No merged pull request produced ${SHA}; not releasing. Run this workflow manually to publish it."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          number="$(jq -r '.number' <<< "${pr}")"
+          labels="$(jq -r '.labels | join(",")' <<< "${pr}")"
+          echo "Pull request #${number}; labels: ${labels:-none}"
+
+          release=true
+          bump=patch
+          case ",${labels}," in
+            *,release:skip,*) release=false ;;
+          esac
+          case ",${labels}," in
+            *,release:major,*) bump=major ;;
+            *,release:minor,*) bump=minor ;;
+          esac
+          echo "release=${release}; bump: ${bump}"
+          echo "release=${release}" >> "$GITHUB_OUTPUT"
+          echo "bump=${bump}" >> "$GITHUB_OUTPUT"
+
   release:
-    if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.merged == true &&
-       !contains(github.event.pull_request.labels.*.name, 'release:skip'))
+    needs: plan
+    if: needs.plan.outputs.release == 'true'
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -72,14 +135,13 @@ jobs:
     steps:
       - uses: actions/checkout@v5
         with:
-          ref: ${{ github.event.pull_request.merge_commit_sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
 
       - name: Compute next version
         id: version
         env:
-          PR_LABELS: ${{ join(github.event.pull_request.labels.*.name, ',') }}
-          BUMP_INPUT: ${{ inputs.bump }}
+          BUMP: ${{ needs.plan.outputs.bump }}
         run: |
           set -euo pipefail
           git fetch --tags --force --quiet
@@ -87,12 +149,7 @@ jobs:
           latest="${latest:-v0.0.0}"
           IFS=. read -r major minor patch <<< "${latest#v}"
 
-          bump="${BUMP_INPUT:-patch}"
-          case ",${PR_LABELS}," in
-            *,release:major,*) bump=major ;;
-            *,release:minor,*) bump=minor ;;
-          esac
-
+          bump="${BUMP:-patch}"
           case "${bump}" in
             major) major=$((major + 1)); minor=0; patch=0 ;;
             minor) minor=$((minor + 1)); patch=0 ;;
